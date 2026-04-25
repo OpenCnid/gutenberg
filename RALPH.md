@@ -6,7 +6,7 @@ Loop-specific operational rules for Ralph. Keep this file brief and practical be
 
 Gutenberg is a standalone Python CLI project for ingesting long texts into Ralph/OpenClaw-friendly synthesis runs.
 
-Current V1 target:
+V1 is complete and validated. V2 target:
 
 - Python package under `src/gutenberg/`.
 - CLI ingests one local text/markdown file into a run directory.
@@ -14,7 +14,11 @@ Current V1 target:
 - Default chunk size: `50_000` characters.
 - Default overlap: `2_000` characters.
 - Chunk on headings/paragraphs/sentences/whitespace before hard cuts.
-- Keep orchestration manual in V1; do not automate OpenClaw sub-agent spawning yet.
+- V1 capabilities preserved: ingest, chunking, manifest, prompt generation, manual orchestration.
+- V2 adds: run status tracking (`status.json`), run validation CLI, chunk context enrichment (position, neighbors, prose structure), and automated orchestration with resume.
+- New CLI commands: `gutenberg status`, `gutenberg validate`, `gutenberg orchestrate`.
+- V2 orchestration generates commands/scripts for humans — no direct agent API calls.
+- Python stdlib only. No external dependencies.
 
 ## Validation
 
