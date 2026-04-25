@@ -31,7 +31,7 @@ You are orchestrating a knowledge synthesis run over a long text that has been s
 
 ## Manual Orchestration Steps
 
-This is a **manual orchestration workflow**. There is no automated worker spawning in V1.
+This is a **manual orchestration workflow**. There is no automated worker spawning.
 
 ### Step 1: Review the manifest
 
@@ -71,6 +71,16 @@ The final synthesis should be written to `{P.RESULTS_DIR}/synthesis.md`.
 - Workers should not have access to other chunks to avoid cross-contamination.
 - If a worker fails, re-run it on the same chunk rather than skipping.
 - The synthesis step should explicitly note any missing chunk analyses.
+
+### V2 CLI Tools (Optional)
+
+If Gutenberg V2 is installed, these commands can help:
+
+- `gutenberg status <run-dir>` — Check completion progress.
+- `gutenberg validate <run-dir>` — Verify run integrity.
+- `gutenberg orchestrate <run-dir>` — Generate a plan for remaining work.
+- `gutenberg orchestrate <run-dir> --script` — Generate a shell script for pending workers.
+- `gutenberg orchestrate <run-dir> --synthesis-check` — Check synthesis readiness.
 """
 
 

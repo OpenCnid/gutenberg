@@ -14,6 +14,7 @@ from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
 from gutenberg.status import create_status, save_status, load_status, infer_status, summarize_status
 from gutenberg.validation import validate_run
+from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
 from gutenberg import paths as P
 
 
@@ -44,6 +45,15 @@ def _build_parser() -> argparse.ArgumentParser:
     validate.add_argument("--strict", action="store_true", default=True, help="All checks including hash verification (default).")
     validate.add_argument("--quick", action="store_true", help="Skip hash verification for speed.")
     validate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    orchestrate = sub.add_parser("orchestrate", help="Plan and generate worker commands for a run.")
+    orchestrate.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    orchestrate.add_argument("--dry-run", action="store_true", default=True, help="Show plan without executing (default).")
+    orchestrate.add_argument("--execute", action="store_true", help="Execute workers (not implemented in V2).")
+    orchestrate.add_argument("--synthesis-check", action="store_true", help="Check synthesis readiness.")
+    orchestrate.add_argument("--script", action="store_true", help="Generate a shell script for pending workers.")
+    orchestrate.add_argument("--skip-failed", action="store_true", help="Skip failed chunks instead of retrying.")
+    orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     return parser
 
@@ -250,6 +260,69 @@ def _run_validate(args: argparse.Namespace) -> int:
     return 0 if all_passed else 1
 
 
+def _run_orchestrate(args: argparse.Namespace) -> int:
+    """Execute the orchestrate subcommand."""
+    run_dir = Path(args.run_dir)
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+
+    # --execute is not implemented in V2
+    if args.execute:
+        print("Warning: --execute is not implemented in V2. "
+              "Orchestration generates commands and scripts only.", file=sys.stderr)
+        return 1
+
+    # Load or infer status
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    plan = build_plan(manifest, status, skip_failed=args.skip_failed)
+
+    if args.synthesis_check:
+        synthesis = check_synthesis(plan, manifest, run_dir)
+        if args.json_output:
+            json.dump(synthesis, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            if synthesis["ready"]:
+                print("Synthesis: READY")
+                print(f"  Prompt: {synthesis['synthesis_prompt']}")
+                print(f"  Output: {synthesis['synthesis_output']}")
+            else:
+                print("Synthesis: NOT READY")
+                for b in synthesis["blockers"]:
+                    print(f"  Blocker: {b}")
+        return 0 if synthesis["ready"] else 1
+
+    if args.script:
+        script = generate_script(plan, run_dir)
+        if args.json_output:
+            json.dump({"script": script}, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            print(script)
+        return 0
+
+    # Default: dry-run plan
+    if args.json_output:
+        json.dump(format_plan_json(plan, run_dir), sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        print(format_plan_text(plan, run_dir))
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -262,6 +335,7 @@ def main(argv: list[str] | None = None) -> None:
         "ingest": _run_ingest,
         "status": _run_status,
         "validate": _run_validate,
+        "orchestrate": _run_orchestrate,
     }
     handler = handlers.get(args.command)
     if handler is None:

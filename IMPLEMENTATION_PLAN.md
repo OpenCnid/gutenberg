@@ -1,8 +1,8 @@
 # Implementation Plan — Gutenberg V2
 
-> **Status:** Phase 0 + Phase 9 + Phase 10 + Phase 11 complete. V2 implementation in progress.
+> **Status:** Phase 0 + Phase 9 + Phase 10 + Phase 11 + Phase 12 complete. V2 implementation complete.
 > **Last updated:** 2026-04-24
-> **V2 baseline:** 137 tests, Phase 0 + Phase 9 + Phase 10 + Phase 11 done.
+> **V2 baseline:** 166 tests, Phase 0 + Phase 9 + Phase 10 + Phase 11 + Phase 12 done.
 > **V1 baseline:** 57 tests, 6 specs satisfied, all passing.
 > **V2 target:** 4 new specs (07–10), ~61+ new tests, full backward compatibility.
 > **Schema version:** Stays `"1.0"` — all V2 manifest changes are additive and optional. V1 manifests remain valid with V2 tools.
@@ -88,119 +88,21 @@ Complete. 22 new tests added (137 total). All acceptance criteria met:
 
 ---
 
-## Phase 12: Automated Orchestration (Spec 10)
+## Phase 12: Automated Orchestration (Spec 10) ✅
 
-**Goal:** Automate worker-to-synthesis pipeline with tracking and resume.
-
-### Task 12.1: Create `orchestration.py` module
-
-**File:** `src/gutenberg/orchestration.py` (new)
-
-Functions:
-
-- `build_plan(manifest: dict, status: dict, skip_failed: bool = False) -> dict` — Analyze chunks, classify into `pending`, `done`, `failed`, `skip`. Returns structured plan: `{pending: [...], done: [...], failed: [...], skipped: [...], synthesis_ready: bool, blockers: [...]}`.
-- `format_worker_command(run_dir: Path, chunk: dict) -> str` — Generate the shell command / prompt text for one worker. Uses the worker prompt file path and chunk file path from the run directory.
-- `format_plan_text(plan: dict, run_dir: Path) -> str` — Human-readable plan output.
-- `format_plan_json(plan: dict, run_dir: Path) -> dict` — Machine-readable plan.
-- `generate_script(plan: dict, run_dir: Path) -> str` — Shell script with one command per pending worker, plus status update calls.
-- `check_synthesis(plan: dict, manifest: dict, run_dir: Path) -> dict` — Report whether synthesis is ready, list blockers, output synthesis command if ready.
-
-**Depends on:** 10.1 (status module).
-
-### Task 12.2: Add `gutenberg orchestrate` CLI subcommand
-
-**File:** `src/gutenberg/cli.py`
-
-In `_build_parser()`:
-- Add `orchestrate` subcommand with positional `run-dir`.
-- Flags: `--dry-run` (default, implicit), `--execute` (future, prints warning that it's not implemented in V2), `--synthesis-check`, `--script`, `--skip-failed`, `--json`.
-
-New function `_run_orchestrate(args) -> int`:
-1. Load manifest and status (or infer status for V1 runs).
-2. Build orchestration plan.
-3. Dispatch based on flags:
-   - Default (dry-run): print plan showing pending/done/failed chunks and commands.
-   - `--synthesis-check`: report readiness and synthesis command.
-   - `--script`: output shell script to stdout.
-   - `--json`: machine-readable output for any mode.
-4. Dry-run mode makes no changes to the run directory.
-5. Exit code: 0 normally, 1 if synthesis not ready (for `--synthesis-check`).
-
-**Depends on:** 12.1.
-
-### Task 12.3: Status integration in orchestration
-
-**File:** `src/gutenberg/orchestration.py`
-
-When `--execute` is eventually implemented (out of V2 scope), the orchestrator would:
-1. Mark chunk as `running` before spawning.
-2. Mark chunk as `done` or `failed` after completion.
-
-For V2 dry-run:
-- Read status, don't write.
-- The generated shell script includes comments showing where status updates would go.
-
-For the `--script` output:
-- Include `# TODO: update status.json after each worker` comments.
-- Or generate actual `gutenberg status-update` calls if we add that subcommand (stretch — probably not V2).
-
-**Depends on:** 12.1, 10.1.
-
-### Task 12.4: Tests for spec 10
-
-**File:** `tests/test_orchestration.py` (new)
-
-Tests (~16):
-- Fresh run (all pending): plan lists all chunks as needing workers.
-- Partial run (3 of 9 done): plan lists only 6 remaining.
-- Complete run: plan shows all done, synthesis ready.
-- `--synthesis-check` on complete run: reports ready + synthesis command.
-- `--synthesis-check` on partial run: reports not ready + specific blockers.
-- `--skip-failed`: failed chunks excluded from plan.
-- `--script` generates valid shell script with one command per pending worker.
-- Resume: orchestrate twice → second run skips done chunks (idempotent).
+Complete. 29 new tests added (166 total). All acceptance criteria met:
+- `orchestration.py` module with `build_plan`, `format_worker_command`, `format_plan_text`, `format_plan_json`, `generate_script`, `check_synthesis`.
+- `gutenberg orchestrate <run-dir>` CLI subcommand with `--dry-run` (default), `--execute` (not-implemented warning), `--synthesis-check`, `--script`, `--skip-failed`, `--json`.
 - Dry-run mode makes no changes to run directory.
-- `--json` output is valid JSON.
-- Worker commands reference correct file paths.
-- V1 run without `status.json`: works via inferred status.
-- Plan format includes chunk IDs and file paths.
-- Empty run (no chunks) handles gracefully.
-- Script output is copy-pasteable (standalone commands).
-- `--execute` prints not-implemented warning.
-- Orchestrator prompt contains V2 CLI references (after Task 12.5).
-
-**Estimated new tests:** ~17
-
-**Depends on:** 12.1–12.3, 12.5.
-
-### Task 12.5: Update orchestrator prompt for V2 CLI references
-
-**File:** `src/gutenberg/prompts.py`
-
-In `generate_orchestrator_prompt()`, add a section after "Manual Orchestration Steps" that references V2 CLI tools:
-
-```
-### V2 CLI Tools (Optional)
-
-If Gutenberg V2 is installed, these commands can help:
-
-- `gutenberg status <run-dir>` — Check completion progress.
-- `gutenberg validate <run-dir>` — Verify run integrity.
-- `gutenberg orchestrate <run-dir>` — Generate a plan for remaining work.
-- `gutenberg orchestrate <run-dir> --script` — Generate a shell script for pending workers.
-- `gutenberg orchestrate <run-dir> --synthesis-check` — Check synthesis readiness.
-```
-
-Preserve the "no automated" language to satisfy `test_no_automation_claims`. Update the wording from "There is no automated worker spawning in V1" to "There is no automated worker spawning" (drop the "in V1" qualifier since V2 also doesn't auto-spawn — it generates commands only). The test asserts `"automated" not in prompt.lower() or "no automated" in prompt.lower()`, so any sentence containing "no automated" passes.
-
-**Depends on:** 12.1, 12.2 (references the commands they implement).
-
-### Spec 10 Risks & Decisions
-
-- **No agent API calls:** V2 orchestration generates commands/scripts only. `--execute` is stubbed with a clear message.
-- **Worker command format:** The generated command should be a generic instruction referencing the worker prompt and chunk file. Format: something like `cat <chunk-file> | <agent-cmd> --prompt <worker-prompt>` or just a textual instruction. Keep it generic since the actual agent CLI varies.
-- **Script portability:** Generated scripts assume bash. Include shebang and `set -e`.
-- **Offline operation:** No network calls. All data from filesystem.
+- Resume: orchestrate on partial run skips done chunks (idempotent).
+- `--synthesis-check` reports readiness with synthesis command when ready, blockers when not.
+- `--script` generates bash script with shebang, `set -e`, one command per pending worker.
+- `--skip-failed` excludes failed chunks from plan.
+- V1 runs without `status.json` work via inferred status.
+- `--json` output is valid JSON for all modes.
+- Empty runs (no chunks) handle gracefully.
+- Orchestrator prompt updated with V2 CLI references; "no automated" language preserved.
+- `--execute` prints not-implemented warning and exits 1.
 
 ---
 
@@ -236,7 +138,7 @@ Preserve the "no automated" language to satisfy `test_no_automation_claims`. Upd
 | Phase 9 (Spec 09) | ~16 | ~73 |
 | Phase 10 (Spec 07) | ~15 | ~88 |
 | Phase 11 (Spec 08) | ~14 | ~102 |
-| Phase 12 (Spec 10) | ~17 | ~119 |
+| Phase 12 (Spec 10) | 29 | 166 |
 
 ## Existing Test Compatibility
 
