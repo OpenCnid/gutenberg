@@ -4,15 +4,27 @@ Loop-specific operational rules for Ralph. Keep this file brief and practical be
 
 ## Build & Run
 
-Succinct rules for how to build and run the project.
+Gutenberg is a standalone Python CLI project for ingesting long texts into Ralph/OpenClaw-friendly synthesis runs.
+
+Current V1 target:
+
+- Python package under `src/gutenberg/`.
+- CLI ingests one local text/markdown file into a run directory.
+- JSON manifest for machines; markdown chunks/prompts/results for agents and humans.
+- Default chunk size: `50_000` characters.
+- Default overlap: `2_000` characters.
+- Chunk on headings/paragraphs/sentences/whitespace before hard cuts.
+- Keep orchestration manual in V1; do not automate OpenClaw sub-agent spawning yet.
 
 ## Validation
 
 Run these after implementing to get immediate feedback:
 
-- Tests: `[test command]`
-- Typecheck: `[typecheck command]`
-- Lint: `[lint command]`
+- Tests: `python -m pytest`
+- Typecheck: not configured yet; add/update when introducing typing tooling
+- Lint: not configured yet; add/update when introducing lint tooling
+
+If pytest or packaging is added, update this section with exact commands that work from repo root.
 
 ## Model Routing
 
@@ -43,30 +55,20 @@ Shell commands executed on failure to capture diagnostic context.
 Each hook should output to a file. Output is bundled into the diagnostic context.
 Leave empty for default context only (error output + git diff).
 
-Example (Playwright):
-  screenshot: npx playwright screenshot --output /tmp/heal-screenshot.png
-  game-state: node scripts/dump-game-state.js > /tmp/heal-gamestate.json
-
-Example (API):
-  health: curl -s $HEALTHCHECK_URL > /tmp/heal-api-state.json
-
 ### Severity Overrides
 
 Force specific error patterns to a tier regardless of diagnosis.
 Format: error-substring: tier
 
-Example:
-  "ECONNREFUSED": human
-  "Cannot read properties of null": auto
-
 ## Operational Notes
-
-Succinct learnings about how to run the project:
 
 - `loop.sh` records per-iteration artifacts under `.ralph/artifacts/iterations/`, including metadata, repo state before/after, and for the Claude lane the exact gateway request/response JSON plus a response summary.
 - If direct cross-agent history is disabled, prefer these artifacts plus git/log output when reviewing a prior Ralph iteration.
 - If you enable cross-agent history in OpenClaw later, do it intentionally for debugging and failure forensics. Keep artifacts, git state, and test output as the primary verification record.
+- Keep `IMPLEMENTATION_PLAN.md` focused on current loop state; durable requirements belong in `specs/`.
 
 ### Codebase Patterns
 
-...
+- Prefer standard-library Python unless a dependency is clearly justified.
+- Keep chunking, manifest creation, prompt generation, and CLI parsing as separate units so tests can target them directly.
+- Do not implement OpenClaw automation in V1; generate prompts and directories for manual orchestration only.
