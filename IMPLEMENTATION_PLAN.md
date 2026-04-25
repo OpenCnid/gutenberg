@@ -1,7 +1,8 @@
 # Implementation Plan — Gutenberg V2
 
-> **Status:** Planning complete — code-verified against V1 source + specs. Implementation not started.
-> **Last updated:** 2026-04-24 (re-verified against codebase + all 10 specs, 2026-04-24)
+> **Status:** Phase 0 + Phase 9 complete. V2 implementation in progress.
+> **Last updated:** 2026-04-24
+> **V2 baseline:** 80 tests, Phase 0 + Phase 9 done.
 > **V1 baseline:** 57 tests, 6 specs satisfied, all passing.
 > **V2 target:** 4 new specs (07–10), ~61+ new tests, full backward compatibility.
 > **Schema version:** Stays `"1.0"` — all V2 manifest changes are additive and optional. V1 manifests remain valid with V2 tools.
@@ -37,188 +38,24 @@ Four capabilities driven by Frankenstein dogfood friction:
 
 ---
 
-## Phase 0: Version Bump (Pre-implementation)
+## Phase 0: Version Bump ✅
 
-**Goal:** Bump version before any functional changes so all V2 artifacts carry `0.2.0`.
-
-### Task 0.1: Bump version strings
-
-**Files:** `src/gutenberg/__init__.py`, `pyproject.toml`
-
-- Change `__version__ = "0.1.0"` to `__version__ = "0.2.0"` in `__init__.py`.
-- Change `version = "0.1.0"` to `version = "0.2.0"` in `pyproject.toml`.
-- Update `test_manifest.py:test_tool_info` assertion from `"0.1.0"` to `"0.2.0"`.
-- Run full test suite to confirm 57/57 pass.
-
-**Depends on:** Nothing.
+Complete. Version bumped to `0.2.0` in `__init__.py`, `pyproject.toml`, and test assertion updated.
 
 ---
 
-## Phase 9: Chunk Context Enrichment (Spec 09)
+## Phase 9: Chunk Context Enrichment (Spec 09) ✅
 
-**Goal:** Add positional metadata, neighboring context, and prose structure detection to chunks.
-
-### Task 9.1: Extend `ChunkInfo` dataclass
-
-**File:** `src/gutenberg/chunking.py`
-
-Add new fields to `ChunkInfo` with defaults (after `heading_context` to preserve dataclass field ordering):
-
-```python
-chunk_index: int = 0        # 0-based position
-chunk_number: int = 0       # 1-based position (chunk_index + 1)
-total_chunks: int = 0       # total count in the run
-prev_context: str = ""      # last N chars of previous chunk
-next_context: str = ""      # first N chars of next chunk
-inferred_section: str | None = None  # detected chapter/section marker
-```
-
-All defaults maintain backward compat — existing `ChunkInfo` construction in tests and `chunk_text()` continues to work.
-
-**Depends on:** Nothing.
-
-### Task 9.2: Post-processing in `chunk_text()` — position and neighbors
-
-**File:** `src/gutenberg/chunking.py`
-
-**Critical refactoring note:** The current `chunk_text()` has a single-chunk early return (lines ~110–120) that bypasses the main loop. This path must also receive post-processing. Two options:
-- (a) Remove the early return; let single-chunk texts fall through to the main while-loop (traced: the loop handles this correctly — one iteration, then `actual_end >= text_len` triggers break). Then apply post-processing once at the end.
-- (b) Keep the early return and duplicate post-processing before it.
-
-Option (a) is cleaner and avoids duplication. The early return is a minor optimization with real maintenance cost in V2.
-
-At the end of `chunk_text()`, after the chunks list is built (via either path):
-
-1. Set `total_chunks = len(chunks)` on every chunk.
-2. Set `chunk_index = i` and `chunk_number = i + 1` for each chunk.
-3. Compute `prev_context` and `next_context`:
-   - Chunk 0: `prev_context = ""` (store empty; the *prompt template* renders "Start of text").
-   - Chunk N-1: `next_context = ""` (similarly; prompt renders "End of text").
-   - Others: `prev_context = chunks[i-1].text[-context_chars:]`, `next_context = chunks[i+1].text[:context_chars]`.
-4. Add `context_chars: int = 200` parameter to `chunk_text()`. When `0`, skip neighbor context (leave `prev_context` and `next_context` as empty strings).
-5. Call `_detect_section()` (from Task 9.3) on each chunk, set `inferred_section`.
-
-**Signature change:** `chunk_text(text, chunk_size=50_000, overlap=2_000, context_chars=200)`. The single call site in `cli.py:_run_ingest()` needs updating to pass `context_chars`.
-
-**Depends on:** 9.1, 9.3 (for step 5).
-
-### Task 9.3: Prose structure detection
-
-**File:** `src/gutenberg/chunking.py`
-
-New function `_detect_section(text: str) -> str | None`:
-
-- Conservative regex patterns for chapter/section markers:
-  - `CHAPTER [IVXLCDM]+` / `CHAPTER \d+` / `Chapter \d+`
-  - `PART [IVXLCDM]+` / `PART \d+` / `Part \d+`
-  - `Letter \d+` / `LETTER \d+`
-  - `Book \d+` / `BOOK \d+`
-- Search in the first ~500 chars of the chunk text.
-- Return the first match or `None`.
-- Called in the post-processing pass for each chunk.
-- Only set `inferred_section` when a match is found; leave `None` otherwise (spec: no empty string).
-
-**Depends on:** 9.1.
-
-### Task 9.4: Update manifest schema with new chunk fields
-
-**File:** `src/gutenberg/manifest.py`
-
-In `build_manifest()`, add to each chunk entry:
-
-```python
-"chunk_index": c.chunk_index,
-"chunk_number": c.chunk_number,
-"total_chunks": c.total_chunks,
-"prev_context": c.prev_context,
-"next_context": c.next_context,
-```
-
-Plus conditionally: `"inferred_section": c.inferred_section` (only if not `None`, to keep manifests clean).
-
-Also add `"context_chars"` to the `"settings"` dict in `build_manifest()` for reproducibility. Add `context_chars: int = 200` parameter to `build_manifest()`.
-
-Existing `heading_context` field preserved unchanged.
-
-`validate_manifest()`: New fields are optional for validation (V1 manifests without them remain valid — spec requirement).
-
-**Depends on:** 9.1, 9.2, 9.3.
-
-### Task 9.5: Update chunk file frontmatter in CLI
-
-**File:** `src/gutenberg/cli.py`
-
-In `_run_ingest()`, update the YAML frontmatter written for each chunk file:
-
-- Add `chunk_index`, `chunk_number`, `total_chunks`.
-- Add `prev_context` and `next_context`.
-- Add `inferred_section` when present (omit key entirely when `None`).
-- Add `--context-chars` CLI option to `ingest` subcommand (default 200).
-- Pass `context_chars` to `chunk_text()` and `build_manifest()`.
-
-**YAML quoting strategy:** `prev_context` and `next_context` contain arbitrary prose that may include YAML-special characters (colons, quotes, `#`, newlines). Use Python's `json.dumps()` to produce a safely-escaped double-quoted string for these two fields only. This avoids adding a YAML library dependency while producing valid YAML values. Example: `prev_context: "He said: \"hello\" and left."` All other frontmatter fields remain unquoted (they are safe scalars).
-
-**Depends on:** 9.2, 9.3, 9.4.
-
-### Task 9.6: Update prompt templates
-
-**File:** `src/gutenberg/prompts.py`
-
-Worker prompt changes:
-- Add "You are analyzing **chunk {chunk_number} of {total_chunks}**." line prominently.
-- Include neighboring context block when available:
-  ```
-  **Previous chunk ends with:** "..."
-  **Next chunk begins with:** "..."
-  ```
-  (Or "Start of text" / "End of text" for first/last.)
-
-Synthesis prompt changes:
-- Include total chunk count.
-- List which chunks have results (this is a template — at prompt-write time, no results exist yet, so template should instruct the synthesizer to check).
-
-Note: The manifest is now passed to prompt generators and already has the enriched fields. The prompt functions use `manifest["chunks"]` to access position info.
-
-**Depends on:** 9.4.
-
-### Task 9.7: Tests for spec 09
-
-**File:** `tests/test_chunking.py` (extend), `tests/test_manifest.py` (extend), `tests/test_prompts.py` (extend)
-
-New chunking tests (~8):
-- `chunk_index`, `chunk_number`, `total_chunks` correct for single-chunk case.
-- Position fields correct for multi-chunk case.
-- `prev_context` and `next_context` populated correctly.
-- `prev_context` empty for first chunk, `next_context` empty for last chunk.
-- `context_chars=0` disables neighbor context.
-- `inferred_section` populated for text with "CHAPTER" markers.
-- `inferred_section` is `None` for text with no detectable structure (no empty string).
-- Heading-based context still works (no regression).
-
-New manifest tests (~3):
-- New fields present in manifest chunk entries.
-- `inferred_section` absent from manifest when `None`.
-- V1-style manifest (without new fields) still validates.
-
-New prompt tests (~3):
-- Worker prompt contains "chunk X of N" text.
-- Worker prompt contains neighbor context when available.
-- Synthesis prompt contains total chunk count.
-
-CLI tests (~2):
-- `--context-chars` option works.
-- Ingested chunk frontmatter contains new fields.
-
-**Estimated new tests:** ~16
-
-**Depends on:** 9.1–9.6.
-
-### Spec 09 Risks & Decisions
-
-- **YAML frontmatter quoting:** Resolved — use `json.dumps()` for `prev_context`/`next_context` values (produces valid YAML double-quoted strings). No YAML library needed.
-- **`inferred_section` regex scope:** Conservative patterns only. Better to miss a section than to false-positive. Can expand patterns in future versions.
-- **Existing test impact:** Adding default fields to `ChunkInfo` shouldn't break existing tests (all new fields have defaults). Verify by running the full suite after 9.1.
-- **Single-chunk early return refactoring:** The early return at `chunking.py:~110` must be unified with the main loop so post-processing applies uniformly. This is a V2-internal refactor that produces identical V1 output for single-chunk cases.
+Complete. 23 new tests added (80 total). All acceptance criteria met:
+- `ChunkInfo` extended with `chunk_index`, `chunk_number`, `total_chunks`, `prev_context`, `next_context`, `inferred_section`.
+- Single-chunk early return removed; post-processing applied uniformly.
+- `_detect_section()` with conservative regex for CHAPTER/PART/LETTER/BOOK markers.
+- Manifest includes all new fields; `inferred_section` omitted when `None`.
+- `context_chars` parameter added to `chunk_text()` and `build_manifest()`.
+- CLI: `--context-chars` option, frontmatter includes all V2 fields, `json.dumps()` for safe YAML quoting.
+- Worker prompt includes chunk position and neighbor context references.
+- Synthesis prompt includes bolded chunk count.
+- V1 manifests without new fields still validate.
 
 ---
 

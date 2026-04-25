@@ -78,11 +78,15 @@ def generate_worker_prompt(manifest: dict[str, Any], run_dir_name: str) -> str:
     """Generate the worker prompt for a specific run."""
     title = manifest.get("source", {}).get("title", "") or "Untitled"
 
+    chunk_count = len(manifest.get("chunks", []))
+
     return f"""# Worker Prompt — {title}
 
 ## Your Task
 
 You are a worker analyzing **one chunk** of a longer text. You will be given a single chunk file to analyze.
+
+You are analyzing **chunk {{chunk_number}} of {chunk_count}**.
 
 ## Instructions
 
@@ -90,6 +94,15 @@ You are a worker analyzing **one chunk** of a longer text. You will be given a s
 2. Analyze the content thoroughly.
 3. Write your analysis in the structured format below.
 4. Save your output to `{P.RESULTS_DIR}/{{chunk_id}}.analysis.md` (where `{{chunk_id}}` matches the chunk you were assigned, e.g., `chunk-0001`).
+
+## Neighboring Context
+
+When available, the chunk file frontmatter includes `prev_context` and `next_context` fields showing
+what text immediately precedes and follows your chunk. Use this for continuity awareness, but analyze
+only the chunk body itself.
+
+- **Previous chunk ends with:** (see `prev_context` in frontmatter, or "Start of text" for chunk 1)
+- **Next chunk begins with:** (see `next_context` in frontmatter, or "End of text" for the last chunk)
 
 ## Important Rules
 
@@ -155,7 +168,7 @@ def generate_synthesis_prompt(manifest: dict[str, Any], run_dir_name: str) -> st
 
 ## Your Task
 
-You are the synthesizer for a knowledge synthesis run. {chunk_count} chunks of a long text were analyzed by individual workers. Your job is to produce a coherent whole-text synthesis from their analyses.
+You are the synthesizer for a knowledge synthesis run. **{chunk_count} chunks** of a long text were analyzed by individual workers. Your job is to produce a coherent whole-text synthesis from their analyses.
 
 ## Inputs
 

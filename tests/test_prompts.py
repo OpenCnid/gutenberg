@@ -75,6 +75,30 @@ class TestSynthesisPrompt:
         assert "missing" in prompt.lower()
 
 
+class TestWorkerPromptV2:
+    def test_chunk_position_in_prompt(self):
+        text = "word " * 200
+        manifest = _make_manifest(text=text, chunk_size=100, overlap=10)
+        prompt = generate_worker_prompt(manifest, "test-run")
+        chunk_count = len(manifest["chunks"])
+        assert f"of {chunk_count}" in prompt
+        assert "chunk_number" in prompt.lower() or "{chunk_number}" in prompt
+
+    def test_neighbor_context_in_prompt(self):
+        prompt = generate_worker_prompt(_make_manifest(), "test-run")
+        assert "prev_context" in prompt.lower() or "previous chunk" in prompt.lower()
+        assert "next_context" in prompt.lower() or "next chunk" in prompt.lower()
+
+
+class TestSynthesisPromptV2:
+    def test_chunk_count_in_synthesis(self):
+        text = "word " * 200
+        manifest = _make_manifest(text=text, chunk_size=100, overlap=10)
+        prompt = generate_synthesis_prompt(manifest, "test-run")
+        chunk_count = len(manifest["chunks"])
+        assert str(chunk_count) in prompt
+
+
 class TestWritePrompts:
     def test_writes_all_files(self, tmp_path):
         run_dir = tmp_path / "run"

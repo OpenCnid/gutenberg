@@ -141,3 +141,83 @@ class TestEdgeCases:
             assert a.char_start == b.char_start
             assert a.char_end == b.char_end
             assert a.text == b.text
+
+
+class TestChunkPosition:
+    def test_single_chunk_position(self, short_text):
+        chunks = chunk_text(short_text)
+        assert len(chunks) == 1
+        assert chunks[0].chunk_index == 0
+        assert chunks[0].chunk_number == 1
+        assert chunks[0].total_chunks == 1
+
+    def test_multi_chunk_position(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        assert len(chunks) > 1
+        for i, c in enumerate(chunks):
+            assert c.chunk_index == i
+            assert c.chunk_number == i + 1
+            assert c.total_chunks == len(chunks)
+
+
+class TestNeighborContext:
+    def test_first_chunk_no_prev(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        assert chunks[0].prev_context == ""
+
+    def test_last_chunk_no_next(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        assert chunks[-1].next_context == ""
+
+    def test_middle_chunks_have_context(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        assert len(chunks) > 2
+        for c in chunks[1:-1]:
+            assert c.prev_context != ""
+            assert c.next_context != ""
+
+    def test_prev_context_matches_previous_chunk(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        for i in range(1, len(chunks)):
+            expected = chunks[i - 1].text[-200:]
+            assert chunks[i].prev_context == expected
+
+    def test_next_context_matches_next_chunk(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
+        for i in range(len(chunks) - 1):
+            expected = chunks[i + 1].text[:200]
+            assert chunks[i].next_context == expected
+
+    def test_context_chars_zero_disables(self, medium_text):
+        chunks = chunk_text(medium_text, chunk_size=500, overlap=50, context_chars=0)
+        for c in chunks:
+            assert c.prev_context == ""
+            assert c.next_context == ""
+
+
+class TestSectionDetection:
+    def test_chapter_marker_detected(self):
+        text = "CHAPTER IV\n\nSome content here." + " word" * 100
+        chunks = chunk_text(text)
+        assert chunks[0].inferred_section == "CHAPTER IV"
+
+    def test_no_marker_returns_none(self, no_heading_text):
+        chunks = chunk_text(no_heading_text)
+        assert chunks[0].inferred_section is None
+
+    def test_chapter_arabic(self):
+        text = "Chapter 3\n\nContent follows." + " word" * 100
+        chunks = chunk_text(text)
+        assert chunks[0].inferred_section == "Chapter 3"
+
+    def test_part_marker(self):
+        text = "PART II\n\nContent follows." + " word" * 100
+        chunks = chunk_text(text)
+        assert chunks[0].inferred_section == "PART II"
+
+    def test_heading_context_preserved(self, heading_text):
+        """V1 heading context still works alongside new fields."""
+        chunks = chunk_text(heading_text, chunk_size=80, overlap=0)
+        if len(chunks) > 1:
+            has_context = any(c.heading_context for c in chunks[1:])
+            assert has_context

@@ -59,7 +59,7 @@ class TestBuildManifest:
     def test_tool_info(self, tmp_path):
         _, manifest, _ = _make_run(tmp_path)
         assert manifest["tool"]["name"] == "gutenberg"
-        assert manifest["tool"]["version"] == "0.1.0"
+        assert manifest["tool"]["version"] == "0.2.0"
 
     def test_source_sha256(self, tmp_path):
         text = "Hello world.\n"
@@ -141,3 +141,41 @@ class TestValidateManifest:
         P.orchestrator_prompt_path(run_dir).unlink()
         errors = validate_manifest(manifest, run_dir)
         assert any("prompt" in e.lower() or "orchestrator" in e.lower() for e in errors)
+
+
+class TestManifestV2Fields:
+    def test_chunk_position_fields(self, tmp_path):
+        text = "a" * 200
+        _, manifest, chunks = _make_run(tmp_path, text=text, chunk_size=100, overlap=10)
+        for mc, c in zip(manifest["chunks"], chunks):
+            assert mc["chunk_index"] == c.chunk_index
+            assert mc["chunk_number"] == c.chunk_number
+            assert mc["total_chunks"] == c.total_chunks
+            assert mc["prev_context"] == c.prev_context
+            assert mc["next_context"] == c.next_context
+
+    def test_inferred_section_absent_when_none(self, tmp_path):
+        _, manifest, _ = _make_run(tmp_path, text="no chapter markers here\n")
+        for mc in manifest["chunks"]:
+            assert "inferred_section" not in mc
+
+    def test_inferred_section_present_when_detected(self, tmp_path):
+        text = "CHAPTER I\n\n" + "word " * 100
+        _, manifest, _ = _make_run(tmp_path, text=text)
+        assert manifest["chunks"][0].get("inferred_section") == "CHAPTER I"
+
+    def test_v1_manifest_without_new_fields_validates(self, tmp_path):
+        """V1 manifests missing new fields should still validate."""
+        run_dir, manifest, _ = _make_run(tmp_path)
+        write_manifest(manifest, run_dir)
+        # Remove V2 fields from the manifest dict to simulate a V1 manifest
+        for mc in manifest["chunks"]:
+            for key in ("chunk_index", "chunk_number", "total_chunks",
+                        "prev_context", "next_context", "inferred_section"):
+                mc.pop(key, None)
+        errors = validate_manifest(manifest, run_dir)
+        assert errors == []
+
+    def test_context_chars_in_settings(self, tmp_path):
+        _, manifest, _ = _make_run(tmp_path)
+        assert "context_chars" in manifest["settings"]

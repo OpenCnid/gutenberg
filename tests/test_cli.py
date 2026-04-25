@@ -127,3 +127,24 @@ class TestCLIErrors:
             assert False, "Should have exited"
         except SystemExit as e:
             assert e.code == 1
+
+
+class TestCLIContextChars:
+    def test_context_chars_option(self, tmp_path, source_file):
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir), "--context-chars", "100"])
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        assert manifest["settings"]["context_chars"] == 100
+
+    def test_chunk_frontmatter_has_v2_fields(self, tmp_path, source_file):
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        chunk_files = sorted(P.chunks_dir(run_dir).glob("chunk-*.md"))
+        assert len(chunk_files) > 0
+        content = chunk_files[0].read_text(encoding="utf-8")
+        assert "chunk_index:" in content
+        assert "chunk_number:" in content
+        assert "total_chunks:" in content
+        assert "prev_context:" in content
+        assert "next_context:" in content

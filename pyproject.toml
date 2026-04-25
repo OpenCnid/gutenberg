@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gutenberg"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standalone Python ingestion CLI for long-text knowledge synthesis"
 requires-python = ">=3.10"
 

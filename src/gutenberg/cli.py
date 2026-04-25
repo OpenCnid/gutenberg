@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--overlap", type=int, default=2_000, help="Overlap between chunks in characters (default: 2000).")
     ingest.add_argument("--title", default=None, help="Human-readable title for the source.")
     ingest.add_argument("--author", default=None, help="Author metadata.")
+    ingest.add_argument("--context-chars", type=int, default=200, help="Characters of neighboring context per chunk (0 to disable, default: 200).")
     ingest.add_argument("--force", action="store_true", help="Overwrite existing non-empty run directory.")
 
     return parser
@@ -87,20 +89,28 @@ def _run_ingest(args: argparse.Namespace) -> int:
     P.source_path(run_dir).write_text(source_text, encoding="utf-8")
 
     # Chunk
-    chunks = chunk_text(source_text, chunk_size=args.chunk_size, overlap=args.overlap)
+    chunks = chunk_text(source_text, chunk_size=args.chunk_size, overlap=args.overlap, context_chars=args.context_chars)
 
     # Write chunk files
     for chunk in chunks:
         chunk_file = P.chunk_path(run_dir, chunk.id)
-        frontmatter = (
-            f"---\n"
-            f"chunk_id: {chunk.id}\n"
-            f"source: {P.SOURCE_FILENAME}\n"
-            f"char_start: {chunk.char_start}\n"
-            f"char_end: {chunk.char_end}\n"
-            f"estimated_tokens: {chunk.estimated_tokens}\n"
-            f"---\n\n"
-        )
+        frontmatter_lines = [
+            "---",
+            f"chunk_id: {chunk.id}",
+            f"source: {P.SOURCE_FILENAME}",
+            f"char_start: {chunk.char_start}",
+            f"char_end: {chunk.char_end}",
+            f"estimated_tokens: {chunk.estimated_tokens}",
+            f"chunk_index: {chunk.chunk_index}",
+            f"chunk_number: {chunk.chunk_number}",
+            f"total_chunks: {chunk.total_chunks}",
+            f"prev_context: {json.dumps(chunk.prev_context)}",
+            f"next_context: {json.dumps(chunk.next_context)}",
+        ]
+        if chunk.inferred_section is not None:
+            frontmatter_lines.append(f"inferred_section: {json.dumps(chunk.inferred_section)}")
+        frontmatter_lines.append("---")
+        frontmatter = "\n".join(frontmatter_lines) + "\n\n"
         # Title line using the chunk ID
         title_line = f"# Chunk {chunk.id.split('-')[1].lstrip('0') or '0'}\n\n"
         chunk_file.write_text(frontmatter + title_line + chunk.text, encoding="utf-8")
@@ -112,6 +122,7 @@ def _run_ingest(args: argparse.Namespace) -> int:
         chunks=chunks,
         chunk_size=args.chunk_size,
         overlap=args.overlap,
+        context_chars=args.context_chars,
         title=args.title,
         author=args.author,
     )

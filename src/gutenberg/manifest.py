@@ -24,6 +24,7 @@ def build_manifest(
     chunks: list[ChunkInfo],
     chunk_size: int,
     overlap: int,
+    context_chars: int = 200,
     title: str | None = None,
     author: str | None = None,
     created_at: datetime | None = None,
@@ -50,6 +51,7 @@ def build_manifest(
         "settings": {
             "chunk_size": chunk_size,
             "overlap": overlap,
+            "context_chars": context_chars,
             "splitter": "boundary-aware-v1",
             "estimated_token_method": "chars_div_4",
         },
@@ -66,6 +68,14 @@ def build_manifest(
                 "char_end": c.char_end,
                 "estimated_tokens": c.estimated_tokens,
                 "heading_context": c.heading_context,
+                "chunk_index": c.chunk_index,
+                "chunk_number": c.chunk_number,
+                "total_chunks": c.total_chunks,
+                "prev_context": c.prev_context,
+                "next_context": c.next_context,
+                **({
+                    "inferred_section": c.inferred_section,
+                } if c.inferred_section is not None else {}),
             }
             for c in chunks
         ],

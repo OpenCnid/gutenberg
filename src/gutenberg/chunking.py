@@ -15,6 +15,12 @@ class ChunkInfo:
     text: str
     estimated_tokens: int
     heading_context: list[str] = field(default_factory=list)
+    chunk_index: int = 0
+    chunk_number: int = 0
+    total_chunks: int = 0
+    prev_context: str = ""
+    next_context: str = ""
+    inferred_section: str | None = None
 
 
 # Patterns for boundary detection
@@ -22,6 +28,16 @@ _HEADING_RE = re.compile(r"^#{1,6}\s", re.MULTILINE)
 _BLANK_LINE_RE = re.compile(r"\n\n")
 _SENTENCE_RE = re.compile(r"[.!?]\s")
 _WHITESPACE_RE = re.compile(r"\s")
+
+_SECTION_RE = re.compile(
+    r"(?:CHAPTER|Chapter|PART|Part|LETTER|Letter|BOOK|Book)\s+(?:[IVXLCDM]+|\d+)"
+)
+
+
+def _detect_section(text: str) -> str | None:
+    """Detect chapter/section markers in the first ~500 chars of text."""
+    m = _SECTION_RE.search(text[:500])
+    return m.group(0) if m else None
 
 
 def _estimate_tokens(char_count: int) -> int:
@@ -113,6 +129,7 @@ def chunk_text(
     text: str,
     chunk_size: int = 50_000,
     overlap: int = 2_000,
+    context_chars: int = 200,
 ) -> list[ChunkInfo]:
     """Split text into boundary-aware chunks with overlap.
 
@@ -120,6 +137,7 @@ def chunk_text(
         text: Source text to chunk.
         chunk_size: Target chunk size in characters.
         overlap: Overlap between adjacent chunks in characters.
+        context_chars: Characters of neighboring context (0 to disable).
 
     Returns:
         List of ChunkInfo objects with stable IDs and offsets.
@@ -128,19 +146,6 @@ def chunk_text(
         return []
 
     text_len = len(text)
-
-    # Single chunk case
-    if text_len <= chunk_size:
-        return [
-            ChunkInfo(
-                id="chunk-0001",
-                char_start=0,
-                char_end=text_len,
-                text=text,
-                estimated_tokens=_estimate_tokens(text_len),
-                heading_context=[],
-            )
-        ]
 
     chunks: list[ChunkInfo] = []
     pos = 0
@@ -191,5 +196,18 @@ def chunk_text(
                 next_start = snapped
 
         pos = next_start
+
+    # Post-processing: position, neighbors, section detection
+    total = len(chunks)
+    for i, chunk in enumerate(chunks):
+        chunk.chunk_index = i
+        chunk.chunk_number = i + 1
+        chunk.total_chunks = total
+        if context_chars > 0:
+            if i > 0:
+                chunk.prev_context = chunks[i - 1].text[-context_chars:]
+            if i < total - 1:
+                chunk.next_context = chunks[i + 1].text[:context_chars]
+        chunk.inferred_section = _detect_section(chunk.text)
 
     return chunks
