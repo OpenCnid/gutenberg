@@ -2,22 +2,22 @@
 
 ## Current State
 
-Ralph project scaffolded and V1 specs written.
+V1 implementation complete. All 57 tests passing. All 6 specs satisfied.
+
+## What's Built
+
+- Boundary-aware chunking engine (heading/paragraph/sentence/whitespace/hard hierarchy)
+- CLI: `python -m gutenberg ingest` with full option parsing
+- Manifest builder + validator (`manifest.json`)
+- Run-specific prompt generators (orchestrator, worker, synthesis)
+- Comprehensive test suite (57 tests across 4 test files)
+- Python stdlib only, no external dependencies
 
 ## Decisions Locked
 
-- Python standalone ingestion CLI.
-- Project root: `projects/gutenberg/`.
-- Default chunk size: `50_000` chars.
-- Default overlap: `2_000` chars.
-- Boundary-aware chunking prefers headings/paragraphs before hard cuts.
-- Result format: `manifest.json` for machines; markdown chunks/prompts/results for agents and humans.
-- V1 scope: ingestion CLI, manifest schema, prompt templates, manual orchestration proof.
-
-## Next Step
-
-Run Ralph planning mode from this directory:
-
-```bash
-./loop.sh plan
-```
+- Python standalone ingestion CLI
+- Default chunk size: 50,000 chars
+- Default overlap: 2,000 chars
+- Boundary-aware chunking
+- JSON manifest for machines; markdown for agents and humans
+- Manual orchestration in V1 — no automated sub-agent spawning

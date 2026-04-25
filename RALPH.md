@@ -18,13 +18,18 @@ Current V1 target:
 
 ## Validation
 
-Run these after implementing to get immediate feedback:
+Run from repo root with the venv active:
 
-- Tests: `python -m pytest`
-- Typecheck: not configured yet; add/update when introducing typing tooling
-- Lint: not configured yet; add/update when introducing lint tooling
+```bash
+source .venv/bin/activate
+python -m pytest -v
+```
 
-If pytest or packaging is added, update this section with exact commands that work from repo root.
+Package is installed editable (`pip install -e .`). pytest is in the venv.
+
+- Tests: `python -m pytest` (57 tests)
+- Typecheck: not configured yet
+- Lint: not configured yet
 
 ## Model Routing
 

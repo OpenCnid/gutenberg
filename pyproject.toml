@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gutenberg"
+version = "0.1.0"
+description = "Standalone Python ingestion CLI for long-text knowledge synthesis"
+requires-python = ">=3.10"
+
+[project.scripts]
+gutenberg = "gutenberg.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

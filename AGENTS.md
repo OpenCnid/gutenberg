@@ -28,7 +28,18 @@ If you are entering this repository cold, start here, then progressively disclos
 - `RALPH.md` — Ralph operational guide and self-heal config
 - `IMPLEMENTATION_PLAN.md` — current loop state and discoveries
 - `PROMPT_plan.md` / `PROMPT_build.md` — loop prompts
-- `specs/` — requirements by topic
+- `specs/` — requirements by topic (6 specs)
+
+## Source Layout
+
+- `src/gutenberg/` — Python package
+  - `cli.py` — CLI entry (`python -m gutenberg ingest`)
+  - `chunking.py` — boundary-aware text splitter
+  - `manifest.py` — `manifest.json` builder and validator
+  - `prompts.py` — orchestrator/worker/synthesis prompt generators
+  - `paths.py` — run directory path helpers
+- `tests/` — pytest suite (57 tests)
+- `pyproject.toml` — package config
 
 ## Invariants
 
