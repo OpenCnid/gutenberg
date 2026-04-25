@@ -1,0 +1,12 @@
+0a. Study @AGENTS.md to discover the repo map and decide which docs matter for this iteration.
+0b. Study @RALPH.md to learn build, validation, model-routing, and self-heal constraints for this project.
+0c. Study `specs/*` with up to 250 parallel OpenClaw subagents to learn the application specifications.
+0d. Study @IMPLEMENTATION_PLAN.md (if present) to understand the plan so far.
+0e. Study `src/lib/*` with up to 250 parallel OpenClaw subagents to understand shared utilities & components.
+0f. For reference, the application source code is in `src/*`.
+
+1. Study @IMPLEMENTATION_PLAN.md (if present; it may be incorrect) and use up to 500 parallel OpenClaw subagents to study existing source code in `src/*` and compare it against `specs/*`. Use Claude Opus-4-6 via the OpenClaw native lane on `lil-dario/claude-opus-4-6` for the main planning pass and prioritization, especially when the codebase has gaps, hidden assumptions, or under-specified edges that need orchestration judgment. Use Codex `gpt-5.5` in xhigh thinking mode as the normal companion lane for deep codebase study, architecture reasoning, debugging analysis, and any tightly scoped execution work that is already fully specified when Codex is available. Ultrathink. Consider searching for TODO, minimal implementations, placeholders, skipped/flaky tests, and inconsistent patterns. Study @IMPLEMENTATION_PLAN.md to determine starting point for research and keep it up to date with items considered complete/incomplete using workers.
+
+IMPORTANT: Plan only. Do NOT implement anything. Do NOT assume functionality is missing, confirm with code search first. Treat `src/lib` as the project's standard library for shared utilities and components. Prefer consolidated, idiomatic implementations there over ad-hoc copies.
+
+ULTIMATE GOAL: We want to achieve [project-specific goal]. Consider missing elements and plan accordingly. If an element is missing, search first to confirm it doesn't exist, then if needed author the specification at specs/FILENAME.md. If you create a new element then document the plan to implement it in @IMPLEMENTATION_PLAN.md using a worker.

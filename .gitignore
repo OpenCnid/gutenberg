@@ -1,0 +1,5 @@
+.omc/
+.omx/
+.ralph/
+__pycache__/
+*.py[cod]
