@@ -6,7 +6,7 @@ Loop-specific operational rules for Ralph. Keep this file brief and practical be
 
 Gutenberg is a standalone Python CLI project for ingesting long texts into Ralph/OpenClaw-friendly synthesis runs.
 
-V1 is complete and validated. V2 target:
+V1 and V2 are complete and validated (166 tests). V3 target:
 
 - Python package under `src/gutenberg/`.
 - CLI ingests one local text/markdown file into a run directory.
@@ -14,10 +14,10 @@ V1 is complete and validated. V2 target:
 - Default chunk size: `50_000` characters.
 - Default overlap: `2_000` characters.
 - Chunk on headings/paragraphs/sentences/whitespace before hard cuts.
-- V1 capabilities preserved: ingest, chunking, manifest, prompt generation, manual orchestration.
-- V2 adds: run status tracking (`status.json`), run validation CLI, chunk context enrichment (position, neighbors, prose structure), and automated orchestration with resume.
-- New CLI commands: `gutenberg status`, `gutenberg validate`, `gutenberg orchestrate`.
-- V2 orchestration generates commands/scripts for humans — no direct agent API calls.
+- V1/V2 capabilities preserved: ingest, chunking, manifest, prompt generation, manual orchestration, status tracking, validation, orchestration planning.
+- V3 adds: per-chunk task materialization, worker lifecycle/retry/resume, executor/worker launch, synthesis execution, and auditable run artifacts/reporting.
+- New/extended CLI commands: `gutenberg execute`, `gutenberg synthesize`, `gutenberg report`, `gutenberg mark`/`retry`/`skip`.
+- V3 execution requires explicit `--execute` flag — dry-run is always the default.
 - Python stdlib only. No external dependencies.
 
 ## Validation
@@ -31,7 +31,7 @@ python -m pytest -v
 
 Package is installed editable (`pip install -e .`). pytest is in the venv.
 
-- Tests: `python -m pytest` (57 tests)
+- Tests: `python -m pytest` (166 tests)
 - Typecheck: not configured yet
 - Lint: not configured yet
 
