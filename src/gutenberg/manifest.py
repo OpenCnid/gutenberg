@@ -27,6 +27,7 @@ def build_manifest(
     context_chars: int = 200,
     title: str | None = None,
     author: str | None = None,
+    chunk_hashes: dict[str, str] | None = None,
     created_at: datetime | None = None,
 ) -> dict[str, Any]:
     """Build the manifest dict for a run."""
@@ -73,6 +74,7 @@ def build_manifest(
                 "total_chunks": c.total_chunks,
                 "prev_context": c.prev_context,
                 "next_context": c.next_context,
+                **({"sha256": chunk_hashes[c.id]} if chunk_hashes and c.id in chunk_hashes else {}),
                 **({
                     "inferred_section": c.inferred_section,
                 } if c.inferred_section is not None else {}),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -12,6 +13,7 @@ from gutenberg.chunking import chunk_text
 from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
 from gutenberg.status import create_status, save_status, load_status, infer_status, summarize_status
+from gutenberg.validation import validate_run
 from gutenberg import paths as P
 
 
@@ -36,6 +38,12 @@ def _build_parser() -> argparse.ArgumentParser:
     status = sub.add_parser("status", help="Show run completion status.")
     status.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
     status.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    validate = sub.add_parser("validate", help="Validate run directory integrity.")
+    validate.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    validate.add_argument("--strict", action="store_true", default=True, help="All checks including hash verification (default).")
+    validate.add_argument("--quick", action="store_true", help="Skip hash verification for speed.")
+    validate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     return parser
 
@@ -97,7 +105,8 @@ def _run_ingest(args: argparse.Namespace) -> int:
     # Chunk
     chunks = chunk_text(source_text, chunk_size=args.chunk_size, overlap=args.overlap, context_chars=args.context_chars)
 
-    # Write chunk files
+    # Write chunk files and collect SHA-256 hashes
+    chunk_hashes: dict[str, str] = {}
     for chunk in chunks:
         chunk_file = P.chunk_path(run_dir, chunk.id)
         frontmatter_lines = [
@@ -119,7 +128,9 @@ def _run_ingest(args: argparse.Namespace) -> int:
         frontmatter = "\n".join(frontmatter_lines) + "\n\n"
         # Title line using the chunk ID
         title_line = f"# Chunk {chunk.id.split('-')[1].lstrip('0') or '0'}\n\n"
-        chunk_file.write_text(frontmatter + title_line + chunk.text, encoding="utf-8")
+        content = frontmatter + title_line + chunk.text
+        chunk_hashes[chunk.id] = hashlib.sha256(content.encode("utf-8")).hexdigest()
+        chunk_file.write_text(content, encoding="utf-8")
 
     # Build and write manifest
     manifest = build_manifest(
@@ -131,6 +142,7 @@ def _run_ingest(args: argparse.Namespace) -> int:
         context_chars=args.context_chars,
         title=args.title,
         author=args.author,
+        chunk_hashes=chunk_hashes,
     )
     write_manifest(manifest, run_dir)
 
@@ -211,6 +223,33 @@ def _run_status(args: argparse.Namespace) -> int:
     return 0 if summary["run_state"] == "complete" else 1
 
 
+def _run_validate(args: argparse.Namespace) -> int:
+    """Execute the validate subcommand."""
+    run_dir = Path(args.run_dir)
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    strict = not args.quick
+    checks = validate_run(run_dir, strict=strict)
+
+    if args.json_output:
+        json.dump(checks, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        for c in checks:
+            mark = "\u2713" if c["passed"] else "\u2717"
+            print(f"  {mark} {c['check']}: {c['detail']}")
+        print()
+        passed = sum(1 for c in checks if c["passed"])
+        failed = sum(1 for c in checks if not c["passed"])
+        print(f"  {passed} passed, {failed} failed")
+
+    all_passed = all(c["passed"] for c in checks)
+    return 0 if all_passed else 1
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -222,6 +261,7 @@ def main(argv: list[str] | None = None) -> None:
     handlers = {
         "ingest": _run_ingest,
         "status": _run_status,
+        "validate": _run_validate,
     }
     handler = handlers.get(args.command)
     if handler is None:

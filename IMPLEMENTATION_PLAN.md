@@ -1,8 +1,8 @@
 # Implementation Plan — Gutenberg V2
 
-> **Status:** Phase 0 + Phase 9 + Phase 10 complete. V2 implementation in progress.
+> **Status:** Phase 0 + Phase 9 + Phase 10 + Phase 11 complete. V2 implementation in progress.
 > **Last updated:** 2026-04-24
-> **V2 baseline:** 115 tests, Phase 0 + Phase 9 + Phase 10 done.
+> **V2 baseline:** 137 tests, Phase 0 + Phase 9 + Phase 10 + Phase 11 done.
 > **V1 baseline:** 57 tests, 6 specs satisfied, all passing.
 > **V2 target:** 4 new specs (07–10), ~61+ new tests, full backward compatibility.
 > **Schema version:** Stays `"1.0"` — all V2 manifest changes are additive and optional. V1 manifests remain valid with V2 tools.
@@ -74,94 +74,17 @@ Complete. 35 new tests added (115 total). All acceptance criteria met:
 
 ---
 
-## Phase 11: Run Validation (Spec 08)
+## Phase 11: Run Validation (Spec 08) ✅
 
-**Goal:** Verify structural integrity and completeness of a run directory.
-
-### Task 11.1: Create `validation.py` module
-
-**File:** `src/gutenberg/validation.py` (new)
-
-Central function `validate_run(run_dir: Path, strict: bool = True) -> list[dict]`:
-
-Returns a list of check results, each: `{"check": str, "passed": bool, "detail": str}`.
-
-Checks (in order):
-1. `manifest.json` exists and is valid JSON with required fields. Can reuse `manifest.validate_manifest()` for structural checks, then layer additional checks.
-2. Source file referenced in manifest exists on disk.
-3. Every chunk file in manifest exists on disk.
-4. (strict only) Chunk file SHA-256 matches manifest per-chunk `sha256` value. Hash is of the **full chunk file on disk** (see Task 11.2). If the manifest lacks per-chunk `sha256` (V1 manifest), skip this check gracefully.
-5. Prompt files exist (orchestrator, worker, synthesis).
-6. If `status.json` exists: valid JSON, consistent with filesystem (e.g., status says `done` but no result file → report inconsistency).
-7. Results directory exists.
-8. If result files exist, they are non-empty.
-
-**Depends on:** 10.1 (for status cross-check, optional).
-
-### Task 11.2: Add per-chunk SHA-256 to manifest
-
-**File:** `src/gutenberg/manifest.py`, `src/gutenberg/cli.py`
-
-**Critical design note:** The hash must be of the **full chunk file on disk** (frontmatter + title line + body text), not just `chunk.text`. This is because spec 08 says "detects corruption or edits" — any change to the file, including metadata, should be caught.
-
-Implementation approach:
-1. Add optional `chunk_hashes: dict[str, str] | None = None` parameter to `build_manifest()`.
-2. If provided, include `"sha256": chunk_hashes[c.id]` in each chunk entry.
-3. In `cli.py:_run_ingest()`, after writing each chunk file, compute SHA-256 of the file content written. Collect as `{chunk_id: hash}` dict.
-4. Pass `chunk_hashes` to `build_manifest()`.
-
-Alternatively, compute hash from the constructed content string before writing (avoids re-reading), since we build `frontmatter + title_line + chunk.text` in the loop.
-
-This is an additive field. Existing V1 manifests without it remain valid.
-
-`validate_manifest()` does not need to check for this field (it's checked by `validation.py`'s hash check instead).
-
-**Depends on:** Nothing. Could be done as part of Phase 9 or 11. Placing here because the motivation is spec 08.
-
-### Task 11.3: Add `gutenberg validate` CLI subcommand
-
-**File:** `src/gutenberg/cli.py`
-
-In `_build_parser()`:
-- Add `validate` subcommand with positional `run-dir`, `--strict` (default), `--quick`, `--json` flags.
-
-New function `_run_validate(args) -> int`:
-1. Call `validate_run(run_dir, strict=not args.quick)`.
-2. If `--json`: print JSON array of check results.
-3. Else: print one line per check (✓/✗), summary at end.
-4. Exit code: 0 if all pass, 1 if any fail.
-
-**Depends on:** 11.1, 11.2.
-
-### Task 11.4: Tests for spec 08
-
-**File:** `tests/test_validation.py` (new)
-
-Tests (~14):
-- Valid V1 run passes all checks.
-- Valid V2 run (with status.json) passes all checks.
-- Missing `manifest.json` → early clear failure.
-- Missing chunk file → failure identifying the file.
-- Corrupted chunk file → hash check fails in strict, passes in quick.
-- Missing prompt file → failure.
-- `status.json` says `done` but result file missing → inconsistency reported.
-- `--json` output is valid JSON with per-check results.
-- Non-empty result files pass; empty result file flagged.
-- V1 manifest without per-chunk SHA-256 → hash check skipped gracefully.
-- All checks report specific file paths and expected vs actual when failing.
+Complete. 22 new tests added (137 total). All acceptance criteria met:
+- `validation.py` module with `validate_run()` returning per-check results.
+- Checks: manifest schema, source file, chunk files, SHA-256 hashes (strict), prompt files, status.json consistency, results directory, non-empty result files.
+- Per-chunk SHA-256 added to manifest via `chunk_hashes` parameter in `build_manifest()`.
+- Hashes computed from full chunk file content (frontmatter + title + body) in `_run_ingest()`.
+- `gutenberg validate <run-dir>` CLI with `--strict` (default), `--quick`, `--json`.
 - Exit code 0 when all pass, 1 when any fail.
-- Results directory missing → failure.
-- Source file missing → failure.
-
-**Estimated new tests:** ~14
-
-**Depends on:** 11.1–11.3.
-
-### Spec 08 Risks & Decisions
-
-- **Per-chunk SHA-256 in manifest:** Additive schema change. V1 manifests remain valid (hash check skipped when field absent). This is the only manifest schema change required by spec 08.
-- **Validation is read-only:** Must not modify the run directory. Explicitly stated in spec.
-- **Reuse of `validate_manifest()`:** The existing `manifest.validate_manifest()` does structural checks. `validation.py` can call it as one of its checks, or reimplement for more granular reporting. Recommend: call it for the structural check, then layer hash/status checks on top.
+- V1 manifests without SHA-256 field: hash check skipped gracefully.
+- Read-only: validation never modifies the run directory.
 
 ---
 
