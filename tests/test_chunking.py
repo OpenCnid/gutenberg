@@ -163,11 +163,11 @@ class TestChunkPosition:
 class TestNeighborContext:
     def test_first_chunk_no_prev(self, medium_text):
         chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
-        assert chunks[0].prev_context == ""
+        assert chunks[0].prev_context == "Start of text"
 
     def test_last_chunk_no_next(self, medium_text):
         chunks = chunk_text(medium_text, chunk_size=500, overlap=50)
-        assert chunks[-1].next_context == ""
+        assert chunks[-1].next_context == "End of text"
 
     def test_middle_chunks_have_context(self, medium_text):
         chunks = chunk_text(medium_text, chunk_size=500, overlap=50)

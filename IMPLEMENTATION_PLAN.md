@@ -1,6 +1,6 @@
 # Implementation Plan — Gutenberg V2
 
-> **Status:** Phase 0 + Phase 9 + Phase 10 + Phase 11 + Phase 12 complete. V2 implementation complete.
+> **Status:** Phase 0 + Phase 9 + Phase 10 + Phase 11 + Phase 12 complete. V2 implementation complete. Post-V2 spec compliance fixes in progress.
 > **Last updated:** 2026-04-24
 > **V2 baseline:** 166 tests, Phase 0 + Phase 9 + Phase 10 + Phase 11 + Phase 12 done.
 > **V1 baseline:** 57 tests, 6 specs satisfied, all passing.
@@ -246,3 +246,21 @@ All path helpers are module-level functions. Adding `STATUS_FILENAME` and `statu
 ### 10. No `src/lib/` directory
 
 The repo has no `src/lib/` directory. All shared code lives in `src/gutenberg/`. This is the project's standard library layout. New modules (`status.py`, `validation.py`, `orchestration.py`) go in `src/gutenberg/`.
+
+---
+
+## Post-V2 Spec Compliance Fixes
+
+### Fixed: Spec 09 sentinel values for boundary chunks (0.6.0)
+
+**Problem:** Spec 09 requires `prev_context` = `"Start of text"` for chunk 0 and `next_context` = `"End of text"` for the last chunk. Implementation used empty string `""` instead.
+
+**Fix:** Added else-branches in `chunking.py` post-processing loop. Updated tests `test_first_chunk_no_prev` and `test_last_chunk_no_next` to match spec.
+
+### Remaining: Spec 10 — worker commands in plan output
+
+**Gap:** `format_plan_text()` lists chunk IDs but doesn't include per-worker commands. `format_worker_command()` exists but isn't called from plan output. Spec says: "The exact command or prompt for each pending worker."
+
+### Remaining: Spec 10 — script status update calls
+
+**Gap:** `generate_script()` has a TODO comment instead of actual status update commands after each worker. Spec says: "Script includes status update calls after each worker completes." Requires a new `gutenberg mark <run-dir> <chunk-id> <state>` CLI subcommand.

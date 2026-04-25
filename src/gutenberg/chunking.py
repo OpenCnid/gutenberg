@@ -206,8 +206,12 @@ def chunk_text(
         if context_chars > 0:
             if i > 0:
                 chunk.prev_context = chunks[i - 1].text[-context_chars:]
+            else:
+                chunk.prev_context = "Start of text"
             if i < total - 1:
                 chunk.next_context = chunks[i + 1].text[:context_chars]
+            else:
+                chunk.next_context = "End of text"
         chunk.inferred_section = _detect_section(chunk.text)
 
     return chunks
