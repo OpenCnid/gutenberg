@@ -12,7 +12,7 @@ from pathlib import Path
 from gutenberg.chunking import chunk_text
 from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
-from gutenberg.status import create_status, save_status, load_status, infer_status, summarize_status
+from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status
 from gutenberg.validation import validate_run
 from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
 from gutenberg import paths as P
@@ -195,10 +195,12 @@ def _run_status(args: argparse.Namespace) -> int:
 
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
 
-    # Load status or infer from filesystem
+    # Load status or infer from filesystem, then reconcile with reality
     status = load_status(run_dir)
     if status is None:
         status = infer_status(manifest, run_dir)
+    else:
+        status = reconcile_status(status, manifest, run_dir)
 
     summary = summarize_status(status)
 
@@ -281,10 +283,12 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
               "Orchestration generates commands and scripts only.", file=sys.stderr)
         return 1
 
-    # Load or infer status
+    # Load or infer status, then reconcile with reality
     status = load_status(run_dir)
     if status is None:
         status = infer_status(manifest, run_dir)
+    else:
+        status = reconcile_status(status, manifest, run_dir)
 
     plan = build_plan(manifest, status, skip_failed=args.skip_failed)
 

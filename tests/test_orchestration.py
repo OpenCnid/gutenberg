@@ -214,6 +214,8 @@ class TestCLIOrchestrate:
         run_dir, manifest, status = _ingest(tmp_path, source_file)
         for c in manifest["chunks"]:
             update_chunk_state(status, c["id"], "done")
+            # Create result files so reconcile doesn't demote back to pending
+            P.worker_result_path(run_dir, c["id"]).write_text("analysis\n", encoding="utf-8")
         save_status(status, run_dir)
 
         main(["orchestrate", str(run_dir), "--synthesis-check"])

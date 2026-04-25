@@ -103,6 +103,38 @@ def infer_status(manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     return status
 
 
+def reconcile_status(status: dict[str, Any], manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+    """Reconcile status.json with filesystem reality.
+
+    If a result file exists and is non-empty but status says 'pending',
+    promote to 'done'. If status says 'done' but no result file, demote
+    to 'pending'. This keeps status accurate when workers write results
+    without updating status.json.
+    """
+    changed = False
+    for c in manifest.get("chunks", []):
+        cid = c["id"]
+        if cid not in status["chunks"]:
+            continue
+        entry = status["chunks"][cid]
+        result_file = P.worker_result_path(run_dir, cid)
+        has_result = result_file.exists() and result_file.stat().st_size > 0
+
+        if has_result and entry["state"] == "pending":
+            update_chunk_state(status, cid, "done")
+            changed = True
+        elif not has_result and entry["state"] == "done":
+            update_chunk_state(status, cid, "pending")
+            changed = True
+
+    if changed:
+        status["run_state"] = compute_run_state(status)
+        status["summary"] = _summarize(status["chunks"])
+        save_status(status, run_dir)
+
+    return status
+
+
 def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     """Return a summary dict: total + per-state counts + run_state."""
     result = _summarize(status["chunks"])
