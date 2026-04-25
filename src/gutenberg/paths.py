@@ -4,6 +4,7 @@ from pathlib import Path
 
 SOURCE_FILENAME = "source.txt"
 MANIFEST_FILENAME = "manifest.json"
+STATUS_FILENAME = "status.json"
 CHUNKS_DIR = "chunks"
 PROMPTS_DIR = "prompts"
 RESULTS_DIR = "results"
@@ -55,3 +56,7 @@ def worker_result_path(run_dir: Path, chunk_id: str) -> Path:
 
 def synthesis_result_path(run_dir: Path) -> Path:
     return results_dir(run_dir) / "synthesis.md"
+
+
+def status_path(run_dir: Path) -> Path:
+    return run_dir / STATUS_FILENAME

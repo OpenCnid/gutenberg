@@ -11,6 +11,7 @@ from pathlib import Path
 from gutenberg.chunking import chunk_text
 from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
+from gutenberg.status import create_status, save_status, load_status, infer_status, summarize_status
 from gutenberg import paths as P
 
 
@@ -22,6 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     ingest = sub.add_parser("ingest", help="Ingest a source file into a run directory.")
+
     ingest.add_argument("source", help="Path to the source text/markdown file.")
     ingest.add_argument("--out", required=True, help="Output run directory path.")
     ingest.add_argument("--chunk-size", type=int, default=50_000, help="Target chunk size in characters (default: 50000).")
@@ -30,6 +32,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--author", default=None, help="Author metadata.")
     ingest.add_argument("--context-chars", type=int, default=200, help="Characters of neighboring context per chunk (0 to disable, default: 200).")
     ingest.add_argument("--force", action="store_true", help="Overwrite existing non-empty run directory.")
+
+    status = sub.add_parser("status", help="Show run completion status.")
+    status.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    status.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     return parser
 
@@ -141,11 +147,68 @@ def _run_ingest(args: argparse.Namespace) -> int:
     print(f"  Chunk size: {args.chunk_size} chars")
     print(f"  Overlap: {args.overlap} chars")
     print(f"  Manifest: {P.manifest_path(run_dir)}")
+    # Create status file
+    status = create_status(manifest)
+    save_status(status, run_dir)
+
     print()
     print("Next step: Open the orchestrator prompt and follow the manual workflow:")
     print(f"  {P.orchestrator_prompt_path(run_dir)}")
 
     return 0
+
+
+def _run_status(args: argparse.Namespace) -> int:
+    """Execute the status subcommand."""
+    run_dir = Path(args.run_dir)
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+
+    # Load status or infer from filesystem
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    summary = summarize_status(status)
+
+    if args.json_output:
+        json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+        return 0 if summary["run_state"] == "complete" else 1
+
+    # Human-readable output
+    print(f"Run: {run_dir.name}")
+    print(f"State: {summary['run_state']}")
+    print()
+
+    for cid, entry in status["chunks"].items():
+        state = entry["state"]
+        print(f"  {cid}: {state}")
+
+    print()
+    parts = []
+    if summary["done"]:
+        parts.append(f"{summary['done']} done")
+    if summary["pending"]:
+        parts.append(f"{summary['pending']} pending")
+    if summary["running"]:
+        parts.append(f"{summary['running']} running")
+    if summary["failed"]:
+        parts.append(f"{summary['failed']} failed")
+    if summary["missing"]:
+        parts.append(f"{summary['missing']} missing")
+    print(f"  {', '.join(parts)} of {summary['total']} total")
+
+    return 0 if summary["run_state"] == "complete" else 1
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -156,7 +219,14 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         sys.exit(1)
 
-    if args.command == "ingest":
-        rc = _run_ingest(args)
-        if rc != 0:
-            sys.exit(rc)
+    handlers = {
+        "ingest": _run_ingest,
+        "status": _run_status,
+    }
+    handler = handlers.get(args.command)
+    if handler is None:
+        parser.print_help()
+        sys.exit(1)
+    rc = handler(args)
+    if rc != 0:
+        sys.exit(rc)

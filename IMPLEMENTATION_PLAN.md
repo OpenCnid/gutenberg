@@ -1,8 +1,8 @@
 # Implementation Plan — Gutenberg V2
 
-> **Status:** Phase 0 + Phase 9 complete. V2 implementation in progress.
+> **Status:** Phase 0 + Phase 9 + Phase 10 complete. V2 implementation in progress.
 > **Last updated:** 2026-04-24
-> **V2 baseline:** 80 tests, Phase 0 + Phase 9 done.
+> **V2 baseline:** 115 tests, Phase 0 + Phase 9 + Phase 10 done.
 > **V1 baseline:** 57 tests, 6 specs satisfied, all passing.
 > **V2 target:** 4 new specs (07–10), ~61+ new tests, full backward compatibility.
 > **Schema version:** Stays `"1.0"` — all V2 manifest changes are additive and optional. V1 manifests remain valid with V2 tools.
@@ -59,107 +59,18 @@ Complete. 23 new tests added (80 total). All acceptance criteria met:
 
 ---
 
-## Phase 10: Run Status Tracking (Spec 07)
+## Phase 10: Run Status Tracking (Spec 07) ✅
 
-**Goal:** Track per-chunk worker completion state with `status.json`.
-
-### Task 10.1: Create `status.py` module
-
-**File:** `src/gutenberg/status.py` (new)
-
-Core data model and operations:
-
-```python
-# Chunk states
-CHUNK_STATES = ("pending", "running", "done", "failed", "missing")
-
-# Run states
-RUN_STATES = ("ingested", "in_progress", "complete", "partial")
-```
-
-Functions:
-
-- `create_status(manifest: dict) -> dict` — Build initial status from manifest (all chunks `pending`), run state `ingested`. Each chunk entry has `state`, `transitions` (list of `{state, timestamp}`).
-- `load_status(run_dir: Path) -> dict | None` — Read `status.json`, return `None` if absent.
-- `save_status(status: dict, run_dir: Path) -> Path` — Write `status.json`.
-- `update_chunk_state(status: dict, chunk_id: str, new_state: str) -> None` — Transition a chunk, record timestamp.
-- `infer_status(manifest: dict, run_dir: Path) -> dict` — For V1 runs without `status.json`: scan filesystem, result file exists + non-empty → `done`, else `pending`.
-- `compute_run_state(status: dict) -> str` — Derive run-level state from chunk states: all pending → `ingested`, all done → `complete`, mix of done+failed/missing → `partial`, else `in_progress`.
-- `summarize_status(status: dict) -> dict` — Return `{total, pending, running, done, failed, missing, run_state}`.
-
-**Depends on:** Nothing (uses `paths.py` constants only).
-
-### Task 10.2: Add path constants
-
-**File:** `src/gutenberg/paths.py`
-
-Add:
-```python
-STATUS_FILENAME = "status.json"
-
-def status_path(run_dir: Path) -> Path:
-    return run_dir / STATUS_FILENAME
-```
-
-**Depends on:** Nothing.
-
-### Task 10.3: Create `status.json` during ingestion
-
-**File:** `src/gutenberg/cli.py`
-
-In `_run_ingest()`, after `write_manifest()`:
-1. `status = create_status(manifest)`
-2. `save_status(status, run_dir)`
-
-Update the summary output to mention status file.
-
-**Depends on:** 10.1, 10.2.
-
-### Task 10.4: Add `gutenberg status` CLI subcommand
-
-**File:** `src/gutenberg/cli.py`
-
-In `_build_parser()`:
-- Add `status` subcommand with positional `run-dir` argument and `--json` flag.
-
-New function `_run_status(args) -> int`:
-1. Load manifest from run dir.
-2. Load or infer status (handle V1 runs without `status.json`).
-3. Compute run state and summary.
-4. If `--json`: print JSON summary, exit 0 if complete, 1 otherwise.
-5. Else: print human-readable table with per-chunk state and summary line.
-6. Exit code: 0 if `complete`, 1 otherwise.
-
-**Depends on:** 10.1, 10.2, 10.3.
-
-### Task 10.5: Tests for spec 07
-
-**File:** `tests/test_status.py` (new)
-
-Tests (~15):
-- `create_status` produces correct initial structure (all pending, run state ingested).
-- `update_chunk_state` transitions correctly, records timestamp.
-- `compute_run_state` returns correct state for each scenario (all pending, mixed, all done, partial).
-- `infer_status` correctly infers from filesystem (V1 compat).
-- `save_status` / `load_status` round-trip.
-- `summarize_status` counts are correct.
-- CLI: `status` on fresh run shows all pending.
-- CLI: `status` after placing a result file shows that chunk as done (via infer or explicit update).
-- CLI: `--json` produces valid JSON.
-- CLI: exit code 0 when complete, 1 otherwise.
-- V1 run without `status.json` produces valid inferred status.
-- Timestamps are ISO 8601.
-- `status.json` created during `gutenberg ingest` alongside manifest.
-
-**Estimated new tests:** ~15
-
-**Depends on:** 10.1–10.4.
-
-### Spec 07 Risks & Decisions
-
-- **Status file write atomicity:** For V2, simple write-and-replace is fine. No concurrent writers expected.
-- **`missing` vs `pending` distinction:** `pending` = not yet attempted, `missing` = expected result file not found after check. The `infer_status` function uses `done`/`pending` only (result exists or not). `missing` is set by validation or explicit check, not by initial creation.
-- **V1 backward compat:** `infer_status` handles runs without `status.json` by scanning `results/` directory against manifest chunk IDs.
+Complete. 35 new tests added (115 total). All acceptance criteria met:
+- `status.py` module with `create_status`, `load_status`, `save_status`, `update_chunk_state`, `infer_status`, `compute_run_state`, `summarize_status`.
+- `paths.py` extended with `STATUS_FILENAME` and `status_path()`.
+- `status.json` created automatically during `gutenberg ingest`.
+- `gutenberg status <run-dir>` CLI subcommand with `--json` flag.
+- Exit code 0 when complete, 1 otherwise.
+- V1 backward compatibility via `infer_status` (filesystem scan).
+- ISO 8601 timestamps on all state transitions.
+- Per-chunk states: pending, running, done, failed, missing.
+- Run-level states: ingested, in_progress, complete, partial.
 
 ---
 
