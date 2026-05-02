@@ -219,6 +219,7 @@ def execute_workers(
     retry_failed: bool = False,
     timeout: int = 1800,
     executor_config: dict[str, Any] | None = None,
+    log_max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Launch workers for eligible chunks.
 
@@ -278,6 +279,8 @@ def execute_workers(
     }
 
     per_attempt_max, per_run_max = get_log_limits(manifest)
+    if log_max_bytes is not None:
+        per_attempt_max = log_max_bytes
 
     def _write_attempt_log(
         cid: str, attempt_num: int, result: ExecutorResult,

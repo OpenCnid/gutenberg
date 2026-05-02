@@ -789,3 +789,47 @@ class TestMaxAttemptsRespected:
         )
         assert result["launched"] == 1
         assert result["succeeded"] == 1
+
+
+class TestLogMaxBytesOverride:
+    """Spec 15: --log-max-bytes CLI flag overrides per-attempt log cap."""
+
+    def test_log_max_bytes_caps_log_size(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(
+            manifest, status, run_dir, executor,
+            log_max_bytes=10,
+        )
+
+        log_file = P.worker_log_path(run_dir, "chunk-0001", 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "[TRUNCATED]" in content
+
+    def test_log_max_bytes_none_uses_default(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(
+            manifest, status, run_dir, executor,
+            log_max_bytes=None,
+        )
+
+        log_file = P.worker_log_path(run_dir, "chunk-0001", 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "[TRUNCATED]" not in content

@@ -222,6 +222,41 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def full_status_json(status: dict[str, Any]) -> dict[str, Any]:
+    """Return a rich JSON-serializable status with per-chunk detail.
+
+    Includes summary counts at the top level plus a ``chunks`` dict with
+    each chunk's state, attempts, error metadata, and result/task paths.
+    Also includes synthesis status when present.
+    """
+    result = summarize_status(status)
+    chunks_detail: dict[str, Any] = {}
+    for cid, entry in status.get("chunks", {}).items():
+        detail: dict[str, Any] = {"state": entry["state"]}
+        if entry.get("result_path"):
+            detail["result_path"] = entry["result_path"]
+        if entry.get("task_path"):
+            detail["task_path"] = entry["task_path"]
+        if entry.get("attempts"):
+            detail["attempt_count"] = len(entry["attempts"])
+            detail["attempts"] = entry["attempts"]
+        if entry.get("last_error"):
+            detail["last_error"] = entry["last_error"]
+        if entry.get("reason"):
+            detail["reason"] = entry["reason"]
+        chunks_detail[cid] = detail
+    result["chunks"] = chunks_detail
+
+    if "synthesis" in status:
+        result["synthesis"] = status["synthesis"]
+
+    warnings = status.get("_warnings", [])
+    if warnings:
+        result["warnings"] = warnings
+
+    return result
+
+
 def _summarize(chunks: dict[str, Any]) -> dict[str, int]:
     """Count per-state totals."""
     counts: dict[str, int] = {s: 0 for s in CHUNK_STATES}

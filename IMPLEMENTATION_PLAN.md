@@ -2,8 +2,8 @@
 
 > **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented. Post-V3 hardening pass complete.
 > **Last updated:** 2026-05-02
-> **Current baseline:** 368 tests passing (confirmed 2026-05-02).
-> **Latest validation commits:** `92431a3` (script task integration). Tag: `0.9.0`.
+> **Current baseline:** 376 tests passing (confirmed 2026-05-02).
+> **Latest validation commits:** Tag: `0.9.0` → `0.10.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -50,8 +50,12 @@ Spec compliance audit identified and fixed 5 gaps:
 5. **max_attempts enforcement in execution (spec 12):** `execute_workers` with `--retry-failed` now respects `max_attempts` — chunks at the limit are not relaunched automatically.
 6. **Script generation V3 awareness (spec 10/14):** `gutenberg orchestrate --script` now uses per-chunk task files when available instead of the shared worker prompt.
 
+### Post-V3 Hardening Pass 2 (2026-05-02)
+
+1. **`status --json` per-chunk detail (spec 12):** JSON output now includes full per-chunk state, attempts, error metadata, result/task paths, synthesis status, and warnings — not just summary counts.
+2. **`--log-max-bytes` CLI flag (spec 15):** Added to `execute`, `synthesize`, and `orchestrate` commands. Overrides per-attempt log cap. Tests verify truncation behavior.
+
 ## Remaining Known Items
 
-- **`--log-max-bytes` CLI flag:** Spec 15 mentions a CLI flag for log limits. Currently only configurable via manifest. Low priority — manifest config covers the use case.
 - **`gutenberg orchestrate --execute --synthesize` integration:** Spec 13 mentions optional combined worker+synthesis execution. Not implemented. `gutenberg execute` + `gutenberg synthesize` is the supported flow.
 - **`clawd` executor class:** Accepted in config validation but routes through `CommandExecutor`. Fine per spec since the executor "shells out to the binary."

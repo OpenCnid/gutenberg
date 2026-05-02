@@ -12,7 +12,7 @@ from pathlib import Path
 from gutenberg.chunking import chunk_text
 from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
-from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status, summarize_failures
+from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status, summarize_failures, full_status_json
 from gutenberg.validation import validate_run
 from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
 from gutenberg.tasks import materialize_tasks, check_staleness
@@ -79,6 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--timeout-seconds", type=int, default=1800, help="Per-worker timeout in seconds (default: 1800).")
     orchestrate.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     orchestrate.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
+    orchestrate.add_argument("--log-max-bytes", type=int, default=None, help="Per-attempt log size cap in bytes (default: 524288).")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     report = sub.add_parser("report", help="Generate run report.")
@@ -96,6 +97,7 @@ def _build_parser() -> argparse.ArgumentParser:
     synthesize.add_argument("--executor", default=None, help="Executor type or profile name.")
     synthesize.add_argument("--executor-config", default=None, help="Path to executor config JSON.")
     synthesize.add_argument("--timeout-seconds", type=int, default=1800, help="Synthesis timeout (default: 1800).")
+    synthesize.add_argument("--log-max-bytes", type=int, default=None, help="Per-attempt log size cap in bytes (default: 524288).")
     synthesize.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     execute = sub.add_parser("execute", help="Execute workers (alias for orchestrate --execute).")
@@ -107,6 +109,7 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     execute.add_argument("--skip-failed", action="store_true", help="Skip failed chunks.")
     execute.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
+    execute.add_argument("--log-max-bytes", type=int, default=None, help="Per-attempt log size cap in bytes (default: 524288).")
     execute.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     mark = sub.add_parser("mark", help="Manually set a chunk's state.")
@@ -303,9 +306,10 @@ def _run_status(args: argparse.Namespace) -> int:
         return 0 if not problems else 1
 
     if args.json_output:
-        json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
+        detail = full_status_json(status)
+        json.dump(detail, sys.stdout, indent=2, ensure_ascii=False)
         print()
-        return 0 if summary["run_state"] == "complete" else 1
+        return 0 if detail["run_state"] == "complete" else 1
 
     # Human-readable output
     print(f"Run: {run_dir.name}")
@@ -542,6 +546,7 @@ def _run_synthesize(args: argparse.Namespace) -> int:
         partial=args.partial,
         force=args.force,
         timeout=config.get("timeout_seconds", 1800),
+        log_max_bytes=getattr(args, "log_max_bytes", None),
     )
 
     if args.json_output:
@@ -623,6 +628,7 @@ def _run_execute_impl(args: argparse.Namespace, run_dir: Path, manifest: dict) -
         retry_failed=getattr(args, "retry_failed", False),
         timeout=config.get("timeout_seconds", 1800),
         executor_config=config,
+        log_max_bytes=getattr(args, "log_max_bytes", None),
     )
 
     if getattr(args, "json_output", False):

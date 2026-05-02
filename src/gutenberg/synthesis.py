@@ -148,6 +148,7 @@ def execute_synthesis(
     partial: bool = False,
     force: bool = False,
     timeout: int = 1800,
+    log_max_bytes: int | None = None,
 ) -> dict[str, Any]:
     """Run synthesis.
 
@@ -221,6 +222,8 @@ def execute_synthesis(
 
     # Write per-attempt synthesis log
     per_attempt_max, per_run_max = get_log_limits(manifest)
+    if log_max_bytes is not None:
+        per_attempt_max = log_max_bytes
     synth_log_path = P.synthesis_log_path(run_dir, attempt_num)
     synth_log_path.parent.mkdir(parents=True, exist_ok=True)
     log_lines: list[str] = [

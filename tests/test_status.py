@@ -12,6 +12,7 @@ from gutenberg.status import (
     RUN_STATES,
     compute_run_state,
     create_status,
+    full_status_json,
     infer_status,
     load_status,
     save_status,
@@ -232,6 +233,62 @@ class TestSummarizeStatus:
         assert summary["run_state"] == status["run_state"]
 
 
+class TestFullStatusJson:
+    def test_includes_per_chunk_detail(self):
+        manifest = _make_manifest("a" * 600, chunk_size=200, overlap=20)
+        status = create_status(manifest)
+        result = full_status_json(status)
+        assert "chunks" in result
+        assert "run_state" in result
+        assert "total" in result
+        for cid in status["chunks"]:
+            assert cid in result["chunks"]
+            assert result["chunks"][cid]["state"] == "pending"
+
+    def test_includes_attempts_and_errors(self):
+        manifest = _make_manifest("a" * 600, chunk_size=200, overlap=20)
+        status = create_status(manifest)
+        cid = list(status["chunks"].keys())[0]
+        status["chunks"][cid]["attempts"] = [
+            {"attempt": 1, "state": "failed", "error_code": "timeout"}
+        ]
+        status["chunks"][cid]["last_error"] = {"code": "timeout", "SendMessage": "timed out"}
+        update_chunk_state(status, cid, "failed")
+        result = full_status_json(status)
+        detail = result["chunks"][cid]
+        assert detail["state"] == "failed"
+        assert detail["attempt_count"] == 1
+        assert detail["attempts"][0]["error_code"] == "timeout"
+        assert detail["last_error"]["code"] == "timeout"
+
+    def test_includes_synthesis_when_present(self):
+        manifest = _make_manifest("a" * 600, chunk_size=200, overlap=20)
+        status = create_status(manifest)
+        status["synthesis"] = {"state": "done", "partial": False}
+        result = full_status_json(status)
+        assert result["synthesis"]["state"] == "done"
+
+    def test_includes_warnings(self):
+        manifest = _make_manifest("a" * 600, chunk_size=200, overlap=20)
+        status = create_status(manifest)
+        status["_warnings"] = ["Chunk unknown-001 in status.json but not in manifest"]
+        result = full_status_json(status)
+        assert "warnings" in result
+        assert len(result["warnings"]) == 1
+
+    def test_omits_empty_optional_fields(self):
+        manifest = _make_manifest("a" * 600, chunk_size=200, overlap=20)
+        status = create_status(manifest)
+        result = full_status_json(status)
+        # No synthesis, no warnings on fresh status
+        assert "synthesis" not in result
+        assert "warnings" not in result
+        # Chunks have no attempts or errors
+        for detail in result["chunks"].values():
+            assert "attempt_count" not in detail
+            assert "last_error" not in detail
+
+
 # ── CLI integration ──────────────────────────────────────────────────
 
 class TestStatusCLI:
@@ -256,6 +313,47 @@ class TestStatusCLI:
         data = json.loads(output)
         assert data["run_state"] == "ingested"
         assert data["total"] > 0
+        # V3: per-chunk detail in JSON output
+        assert "chunks" in data
+        for cid, detail in data["chunks"].items():
+            assert "state" in detail
+            assert detail["state"] == "pending"
+
+    def test_status_json_includes_attempts_and_errors(self, tmp_path, capsys):
+        """status --json includes per-chunk attempts and error metadata (spec 12)."""
+        run_dir, manifest = _make_run(tmp_path)
+        from gutenberg.status import load_status as _ls, save_status as _ss, update_chunk_state as _uc
+        status = _ls(run_dir)
+        cid = manifest["chunks"][0]["id"]
+        # Simulate a failed attempt
+        entry = status["chunks"][cid]
+        entry["attempts"] = [{
+            "attempt": 1,
+            "state": "failed",
+            "started_at": "2026-04-24T00:00:00+00:00",
+            "ended_at": "2026-04-24T00:01:00+00:00",
+            "executor": "command",
+            "error_code": "executor_exit_nonzero",
+            "error_message": "exited with code 1",
+        }]
+        entry["last_error"] = {
+            "code": "executor_exit_nonzero",
+            "SendMessage": "exited with code 1",
+        }
+        _uc(status, cid, "failed")
+        _ss(status, run_dir)
+        capsys.readouterr()
+        try:
+            main(["status", str(run_dir), "--json"])
+        except SystemExit:
+            pass
+        output = capsys.readouterr().out
+        data = json.loads(output)
+        chunk_detail = data["chunks"][cid]
+        assert chunk_detail["state"] == "failed"
+        assert chunk_detail["attempt_count"] == 1
+        assert len(chunk_detail["attempts"]) == 1
+        assert chunk_detail["last_error"]["code"] == "executor_exit_nonzero"
 
     def test_status_after_result(self, tmp_path, capsys):
         run_dir, manifest = _make_run(tmp_path)

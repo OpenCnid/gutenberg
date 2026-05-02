@@ -31,7 +31,7 @@ python -m pytest -v
 
 Package is installed editable (`pip install -e .`). pytest is in the venv.
 
-- Tests: `python -m pytest` (368 tests)
+- Tests: `python -m pytest` (376 tests)
 - Typecheck: not configured yet
 - Lint: not configured yet
 
