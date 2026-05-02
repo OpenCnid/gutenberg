@@ -1,9 +1,9 @@
 # Implementation Plan — Gutenberg V3
 
-> **Status:** V1 complete. V2 complete and dogfood-validated. V3 specs 11–15 reviewed; detailed implementation plan below. **Plan only — do not implement without explicit instruction.**
-> **Last updated:** 2026-04-25
-> **Current baseline:** 166 tests passing (confirmed 2026-04-25).
-> **Latest validation commits:** `20eeea9`, `bc86c69`, `f2abb05`.
+> **Status:** V1 complete. V2 complete. V3 Slice 1 (Spec 14) complete. Slice 2 (Spec 12) next.
+> **Last updated:** 2026-05-01
+> **Current baseline:** 206 tests passing (confirmed 2026-05-01).
+> **Latest validation commits:** `9121f71` (spec 14 task materialization).
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -47,8 +47,18 @@
 ### V2 Notes Carried Into V3
 
 - The shared worker prompt containing literal `{chunk_number}` is not a V2 blocker because actual position metadata lives in each chunk file's frontmatter.
-- V3 should improve ergonomics by materializing per-chunk worker task files or task payloads with concrete chunk numbers, paths, and result targets.
+- ~~V3 should improve ergonomics by materializing per-chunk worker task files or task payloads with concrete chunk numbers, paths, and result targets.~~ → Done in Slice 1 (spec 14).
 - V2 script output is an operational scaffold. V3 should replace scaffold/TODO status updates with real lifecycle-aware execution and auditable logs.
+
+### V3 Slice 1 Complete (2026-05-01)
+
+- **Spec 14 — Per-Chunk Task Materialization** fully implemented.
+- New module: `src/gutenberg/tasks.py` — `generate_worker_task`, `generate_synthesis_task`, `build_task_index`, `materialize_tasks`, `check_staleness`.
+- Extended `paths.py` with V3 path helpers (tasks, logs, reports, orchestration).
+- New CLI subcommand: `gutenberg tasks <run-dir> [--refresh] [--dry-run] [--json]`.
+- Extended `validation.py`: task index JSON check, task file existence, unresolved placeholder detection.
+- 40 new tests. Total: 206 passing.
+- Commit: `9121f71`.
 
 ## V3 Goal
 
