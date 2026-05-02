@@ -28,6 +28,7 @@ from gutenberg.synthesis import (
     execute_synthesis,
 )
 from gutenberg.reporting import (
+    append_event,
     build_report,
     format_report_markdown,
     format_report_json,
@@ -614,6 +615,7 @@ def _run_execute_impl(args: argparse.Namespace, run_dir: Path, manifest: dict) -
         only=getattr(args, "only", None),
         retry_failed=getattr(args, "retry_failed", False),
         timeout=config.get("timeout_seconds", 1800),
+        executor_config=config,
     )
 
     if getattr(args, "json_output", False):
@@ -654,6 +656,12 @@ def _run_mark(args: argparse.Namespace) -> int:
         return 1
 
     save_status(status, run_dir)
+    append_event(run_dir, {
+        "event": "chunk_marked",
+        "chunk_id": args.chunk_id,
+        "state": args.state,
+        "reason": args.reason,
+    })
     print(f"Marked {args.chunk_id} as {args.state}.")
     return 0
 
@@ -690,6 +698,11 @@ def _run_retry(args: argparse.Namespace) -> int:
         print("No chunks eligible for retry.")
     else:
         save_status(status, run_dir)
+        for cid in reset:
+            append_event(run_dir, {
+                "event": "chunk_retried",
+                "chunk_id": cid,
+            })
         print(f"Reset {len(reset)} chunk(s) to pending: {', '.join(reset)}")
 
     return 0
@@ -719,6 +732,11 @@ def _run_skip(args: argparse.Namespace) -> int:
         return 1
 
     save_status(status, run_dir)
+    append_event(run_dir, {
+        "event": "chunk_skipped",
+        "chunk_id": args.chunk_id,
+        "reason": args.reason,
+    })
     print(f"Skipped {args.chunk_id}: {args.reason}")
     return 0
 

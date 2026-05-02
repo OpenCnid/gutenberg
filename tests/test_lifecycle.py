@@ -768,3 +768,67 @@ class TestCLIStatusFailures:
         problems = json.loads(captured.out)
         assert len(problems) >= 1
         assert any(p["chunk_id"] == cid for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# Event logging for mark/retry/skip CLI operations
+# ---------------------------------------------------------------------------
+
+class TestMarkRetrySkipEvents:
+    """Verify mark, retry, and skip CLI commands emit events."""
+
+    def test_mark_emits_event(self, tmp_path, source_file, capsys):
+        from gutenberg.reporting import read_events
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        cid = manifest["chunks"][0]["id"]
+
+        main(["mark", str(run_dir), cid, "failed", "--reason", "test failure"])
+
+        events = read_events(run_dir)
+        mark_events = [e for e in events if e["event"] == "chunk_marked"]
+        assert len(mark_events) == 1
+        assert mark_events[0]["chunk_id"] == cid
+        assert mark_events[0]["state"] == "failed"
+
+    def test_skip_emits_event(self, tmp_path, source_file, capsys):
+        from gutenberg.reporting import read_events
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        cid = manifest["chunks"][0]["id"]
+
+        main(["skip", str(run_dir), cid, "--reason", "not needed"])
+
+        events = read_events(run_dir)
+        skip_events = [e for e in events if e["event"] == "chunk_skipped"]
+        assert len(skip_events) == 1
+        assert skip_events[0]["chunk_id"] == cid
+        assert skip_events[0]["reason"] == "not needed"
+
+    def test_retry_emits_events(self, tmp_path, source_file, capsys):
+        from gutenberg.reporting import read_events
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        cid = manifest["chunks"][0]["id"]
+
+        # First mark as failed
+        main(["mark", str(run_dir), cid, "failed", "--reason", "test"])
+        # Then retry
+        main(["retry", str(run_dir), "--chunk", cid])
+
+        events = read_events(run_dir)
+        retry_events = [e for e in events if e["event"] == "chunk_retried"]
+        assert len(retry_events) == 1
+        assert retry_events[0]["chunk_id"] == cid

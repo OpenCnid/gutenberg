@@ -218,6 +218,7 @@ def execute_workers(
     only: list[str] | None = None,
     retry_failed: bool = False,
     timeout: int = 1800,
+    executor_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Launch workers for eligible chunks.
 
@@ -430,6 +431,6 @@ def execute_workers(
         # Final status save
         save_status(status, run_dir)
         # Write orchestration summary
-        write_orchestration_summary(manifest, status, run_dir)
+        write_orchestration_summary(manifest, status, run_dir, executor_config)
 
     return summary
