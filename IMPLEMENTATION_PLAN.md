@@ -1,9 +1,9 @@
 # Implementation Plan — Gutenberg V3
 
-> **Status:** V1 complete. V2 complete. V3 Slices 1-3 complete. Slice 4 (Spec 13) next.
+> **Status:** V1 complete. V2 complete. V3 Slices 1-4 complete. Slice 5 (Spec 15) next.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 289 tests passing (confirmed 2026-05-01).
-> **Latest validation commits:** `d4eb615` (spec 11 executor).
+> **Current baseline:** 308 tests passing (confirmed 2026-05-01).
+> **Latest validation commits:** `a89136a` (spec 13 synthesis).
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -77,6 +77,15 @@
 - Updated existing test: `--execute` now requires config instead of old "not implemented" error.
 - 27 new tests. Total: 289 passing.
 - Commit: `d4eb615`.
+
+### V3 Slice 4 Complete (2026-05-01)
+
+- **Spec 13 — Synthesis Execution** fully implemented.
+- New module: `src/gutenberg/synthesis.py` — readiness checks, input building, full/partial execution.
+- New CLI: `gutenberg synthesize` with `--execute`, `--partial`, `--force`, `--json`.
+- Extended validation: synthesis status consistency check.
+- 19 new tests. Total: 308 passing.
+- Commit: `a89136a`.
 
 ## V3 Goal
 
