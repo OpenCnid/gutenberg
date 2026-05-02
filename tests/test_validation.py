@@ -7,7 +7,7 @@ import pytest
 
 from gutenberg.cli import main
 from gutenberg.validation import validate_run
-from gutenberg.status import create_status, save_status, update_chunk_state
+from gutenberg.status import create_status, save_status, load_status, update_chunk_state
 from gutenberg import paths as P
 
 
@@ -250,3 +250,105 @@ class TestManifestSHA256:
             file_path = run_dir / chunk["path"]
             actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
             assert chunk["sha256"] == actual_hash
+
+
+# ---------------------------------------------------------------------------
+# Attempt log path validation (V3)
+# ---------------------------------------------------------------------------
+
+class TestValidateAttemptLogs:
+    def test_valid_attempt_logs(self, tmp_path, source_file, capsys):
+        """Attempt logs that exist should pass validation."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+
+        from gutenberg.executor import CommandExecutor, execute_workers
+        import stat
+
+        # Create fake worker script
+        script = tmp_path / "worker.sh"
+        content = "# Chunk Summary\nDone.\n"
+        staging = tmp_path / "_content.md"
+        staging.write_text(content)
+        script.write_text(f'#!/bin/bash\ncp "{staging}" "$1"\n')
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+
+        executor = CommandExecutor(command=[str(script), "{result_path}"])
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+        capsys.readouterr()
+
+        try:
+            main(["validate", str(run_dir), "--json"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        checks = json.loads(captured.out)
+        log_check = next((c for c in checks if c["check"] == "attempt_logs_exist"), None)
+        assert log_check is not None
+        assert log_check["passed"]
+
+    def test_dangling_attempt_log_path(self, tmp_path, source_file, capsys):
+        """Missing attempt log files should fail validation."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+
+        # Manually add a status entry with a bogus log_path
+        status = load_status(run_dir)
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        cid = manifest["chunks"][0]["id"]
+        status["chunks"][cid]["attempts"] = [{
+            "attempt": 1,
+            "state": "done",
+            "log_path": "logs/workers/nonexistent.log",
+        }]
+        save_status(status, run_dir)
+        capsys.readouterr()
+
+        try:
+            main(["validate", str(run_dir), "--json"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        checks = json.loads(captured.out)
+        log_check = next((c for c in checks if c["check"] == "attempt_logs_exist"), None)
+        assert log_check is not None
+        assert not log_check["passed"]
+        assert "nonexistent.log" in log_check["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Worker result section checks (V3)
+# ---------------------------------------------------------------------------
+
+class TestValidateWorkerSections:
+    def test_section_warnings_reported(self, tmp_path, source_file, capsys):
+        """Worker results missing sections should be reported as warnings."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+
+        manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
+        # Write a result file that's valid but missing required sections
+        cid = manifest["chunks"][0]["id"]
+        P.worker_result_path(run_dir, cid).write_text(
+            "# Some analysis\n\nThis is an analysis without required sections.\n"
+        )
+        capsys.readouterr()
+
+        try:
+            main(["validate", str(run_dir), "--json"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        checks = json.loads(captured.out)
+        section_check = next((c for c in checks if c["check"] == "worker_result_sections"), None)
+        assert section_check is not None
+        assert section_check["passed"]  # warning-level, still passes
+        assert "missing" in section_check["detail"].lower()

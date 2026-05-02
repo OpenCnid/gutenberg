@@ -2,7 +2,7 @@
 
 > **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 345 tests passing (confirmed 2026-05-01).
+> **Current baseline:** 348 tests passing (confirmed 2026-05-01).
 > **Latest validation commits:** `128a71a` (spec 15 reporting). Tag: `0.7.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
@@ -103,8 +103,9 @@
 - **Per-attempt log files**: Each worker attempt writes a bounded (512KB) log file to `logs/workers/{chunk_id}.attempt-{NNN}.log`. Each synthesis attempt writes to `logs/synthesis/attempt-{NNN}.log`. Log paths are recorded in status attempt entries.
 - **Orchestration summary**: `execute_workers` now writes `orchestration.json` after every execution via `write_orchestration_summary`, with executor config metadata.
 - **Mark/retry/skip event logging**: `gutenberg mark`, `gutenberg retry`, and `gutenberg skip` CLI commands now emit lifecycle events to `logs/events.jsonl`.
-- **15 new tests** covering event emission, log file creation, log path recording, orchestration.json generation, and mark/retry/skip event logging.
-- **Test growth:** 330 → 345 tests.
+- **Validation enhancements**: `gutenberg validate` now checks attempt log paths referenced in status.json and reports missing worker result sections as warnings.
+- **18 new tests** covering event emission, log file creation, log path recording, orchestration.json generation, mark/retry/skip event logging, attempt log validation, and worker result section checking.
+- **Test growth:** 330 → 348 tests.
 ### V3 Summary
 
 - **All 5 V3 specs implemented** in recommended order (14 → 12 → 11 → 13 → 15).

@@ -9,6 +9,7 @@ from typing import Any
 
 from gutenberg import paths as P
 from gutenberg.manifest import validate_manifest
+from gutenberg.lifecycle import check_sections
 from gutenberg.status import load_status
 
 _SYNTHESIS_DONE_STATES = ("done", "partial")
@@ -237,6 +238,55 @@ def validate_run(run_dir: Path, strict: bool = True) -> list[dict[str, Any]]:
                     "synthesis_consistency",
                     False,
                     f"Synthesis status is '{synth_state}' but output file is missing or empty",
+                ))
+
+    # 14. Attempt log path validation (V3)
+    if status is not None:
+        dangling_logs: list[str] = []
+        for cid, entry in status.get("chunks", {}).items():
+            for att in entry.get("attempts", []):
+                lp = att.get("log_path")
+                if lp and not (run_dir / lp).exists():
+                    dangling_logs.append(f"{cid}: {lp}")
+        # Also check synthesis attempts
+        for att in status.get("synthesis", {}).get("attempts", []):
+            lp = att.get("log_path")
+            if lp and not (run_dir / lp).exists():
+                dangling_logs.append(f"synthesis: {lp}")
+        if dangling_logs:
+            results.append(_check(
+                "attempt_logs_exist",
+                False,
+                f"Dangling attempt log paths: {'; '.join(dangling_logs[:10])}",
+            ))
+        elif any(
+            att.get("log_path")
+            for entry in status.get("chunks", {}).values()
+            for att in entry.get("attempts", [])
+        ):
+            results.append(_check("attempt_logs_exist", True, "All referenced attempt logs exist"))
+
+    # 15. Worker result section checks (V3, warning-level)
+    if rdir:
+        sections_results_path = run_dir / rdir
+        if sections_results_path.exists():
+            missing_sections_report: list[str] = []
+            for result_file in sorted(sections_results_path.glob("*.analysis.md")):
+                if result_file.stat().st_size > 0:
+                    try:
+                        file_content = result_file.read_text(encoding="utf-8")
+                        missing = check_sections(file_content)
+                        if missing:
+                            missing_sections_report.append(
+                                f"{result_file.name}: missing {len(missing)} section(s)"
+                            )
+                    except (OSError, UnicodeDecodeError):
+                        pass
+            if missing_sections_report:
+                results.append(_check(
+                    "worker_result_sections",
+                    True,  # warning-level — pass but report
+                    f"Section warnings: {'; '.join(missing_sections_report[:10])}",
                 ))
 
     return results
