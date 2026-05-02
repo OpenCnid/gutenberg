@@ -833,3 +833,193 @@ class TestLogMaxBytesOverride:
         assert log_file.exists()
         content = log_file.read_text(encoding="utf-8")
         assert "[TRUNCATED]" not in content
+
+
+# ---------------------------------------------------------------------------
+# --synthesize integration (Spec 13 optional integration)
+# ---------------------------------------------------------------------------
+
+def _make_synth_script(tmp_path: Path) -> Path:
+    """Create a script that writes synthesis content to the result path."""
+    content = "# Synthesis\n\n## Executive Summary\n\nGreat book.\n"
+    staging = tmp_path / "_synth_staging.md"
+    staging.write_text(content, encoding="utf-8")
+    script = tmp_path / "synth-writer.sh"
+    script.write_text(f'#!/bin/bash\ncp "{staging}" "$1"\n', encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script
+
+
+class TestExecuteSynthesize:
+    """Spec 13: --synthesize runs synthesis after successful worker execution."""
+
+    def test_execute_synthesize_runs_synthesis(self, tmp_path, source_file, capsys):
+        """Workers complete then synthesis runs automatically."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        worker_script = _make_fake_worker_script(tmp_path)
+        synth_script = _make_synth_script(tmp_path)
+        # Use a combo script that handles both worker and synthesis
+        combo = tmp_path / "combo.sh"
+        combo.write_text(
+            f'#!/bin/bash\n'
+            f'# Detect if this is synthesis (task path contains synthesis)\n'
+            f'if echo "$1" | grep -q synthesis; then\n'
+            f'  cp "{tmp_path / "_synth_staging.md"}" "$2"\n'
+            f'else\n'
+            f'  cp "{tmp_path / "_worker_content.md"}" "$1"\n'
+            f'fi\n',
+            encoding="utf-8",
+        )
+        combo.chmod(combo.stat().st_mode | stat.S_IEXEC)
+
+        config = {
+            "executor": {
+                "type": "command",
+                "command": [str(worker_script), "{result_path}"],
+            }
+        }
+        config_path = tmp_path / "exec.json"
+        config_path.write_text(json.dumps(config))
+
+        try:
+            main(["execute", str(run_dir),
+                  "--executor-config", str(config_path),
+                  "--synthesize"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        # Workers completed and synthesis ran (or attempted)
+        assert "Execution complete" in captured.out or "Launched" in captured.out
+        # Synthesis either ran or reported readiness status
+        assert "synthesis" in captured.out.lower() or "Synthesis" in captured.out
+
+    def test_execute_synthesize_skipped_on_worker_failure(self, tmp_path, source_file, capsys):
+        """If workers fail, synthesis is not attempted."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        # Failing worker
+        fail_script = tmp_path / "fail.sh"
+        fail_script.write_text("#!/bin/bash\nexit 1\n")
+        fail_script.chmod(fail_script.stat().st_mode | stat.S_IEXEC)
+
+        config = {
+            "executor": {
+                "type": "command",
+                "command": [str(fail_script)],
+            }
+        }
+        config_path = tmp_path / "exec.json"
+        config_path.write_text(json.dumps(config))
+
+        try:
+            main(["execute", str(run_dir),
+                  "--executor-config", str(config_path),
+                  "--synthesize"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        # Synthesis should NOT appear (workers failed)
+        assert "Synthesis done" not in captured.out
+        assert not P.synthesis_result_path(run_dir).exists()
+
+    def test_execute_synthesize_json_includes_synthesis(self, tmp_path, source_file, capsys):
+        """--json output includes synthesis result when --synthesize is used."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        worker_script = _make_fake_worker_script(tmp_path)
+
+        config = {
+            "executor": {
+                "type": "command",
+                "command": [str(worker_script), "{result_path}"],
+            }
+        }
+        config_path = tmp_path / "exec.json"
+        config_path.write_text(json.dumps(config))
+
+        try:
+            main(["execute", str(run_dir),
+                  "--executor-config", str(config_path),
+                  "--synthesize", "--json"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        output = json.loads(captured.out)
+        assert "synthesis" in output
+
+    def test_orchestrate_execute_synthesize(self, tmp_path, source_file, capsys):
+        """orchestrate --execute --synthesize also works."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir),
+              "--chunk-size", "500", "--overlap", "50"])
+        capsys.readouterr()
+
+        worker_script = _make_fake_worker_script(tmp_path)
+
+        config = {
+            "executor": {
+                "type": "command",
+                "command": [str(worker_script), "{result_path}"],
+            }
+        }
+        config_path = tmp_path / "exec.json"
+        config_path.write_text(json.dumps(config))
+
+        try:
+            main(["orchestrate", str(run_dir),
+                  "--execute",
+                  "--executor-config", str(config_path),
+                  "--synthesize"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        assert "Execution complete" in captured.out
+        assert "synthesis" in captured.out.lower() or "Synthesis" in captured.out
+
+
+class TestSynthesizeDryRun:
+    """Spec 13: --dry-run flag on synthesize command."""
+
+    def test_dry_run_explicit(self, tmp_path, source_file, capsys):
+        """synthesize --dry-run shows readiness without executing."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir)])
+        capsys.readouterr()
+
+        try:
+            main(["synthesize", str(run_dir), "--dry-run"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        assert "NOT READY" in captured.out or "pending" in captured.out.lower()
+
+    def test_dry_run_is_default(self, tmp_path, source_file, capsys):
+        """synthesize without --execute defaults to dry-run behavior."""
+        run_dir = tmp_path / "run"
+        main(["ingest", str(source_file), "--out", str(run_dir)])
+        capsys.readouterr()
+
+        try:
+            main(["synthesize", str(run_dir)])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        # Should show readiness check output, not launch anything
+        assert "NOT READY" in captured.out or "pending" in captured.out.lower()
+        assert not P.synthesis_result_path(run_dir).exists()

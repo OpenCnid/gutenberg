@@ -79,6 +79,7 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--timeout-seconds", type=int, default=1800, help="Per-worker timeout in seconds (default: 1800).")
     orchestrate.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     orchestrate.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
+    orchestrate.add_argument("--synthesize", action="store_true", help="Run synthesis after workers complete (requires --execute).")
     orchestrate.add_argument("--log-max-bytes", type=int, default=None, help="Per-attempt log size cap in bytes (default: 524288).")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
@@ -92,6 +93,7 @@ def _build_parser() -> argparse.ArgumentParser:
     synthesize = sub.add_parser("synthesize", help="Run synthesis over worker results.")
     synthesize.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
     synthesize.add_argument("--execute", action="store_true", help="Launch synthesis executor.")
+    synthesize.add_argument("--dry-run", action="store_true", default=True, help="Show readiness without executing (default).")
     synthesize.add_argument("--partial", action="store_true", help="Allow synthesis with missing chunks.")
     synthesize.add_argument("--force", action="store_true", help="Overwrite existing synthesis output.")
     synthesize.add_argument("--executor", default=None, help="Executor type or profile name.")
@@ -109,6 +111,7 @@ def _build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     execute.add_argument("--skip-failed", action="store_true", help="Skip failed chunks.")
     execute.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
+    execute.add_argument("--synthesize", action="store_true", help="Run synthesis after workers complete.")
     execute.add_argument("--log-max-bytes", type=int, default=None, help="Per-attempt log size cap in bytes (default: 524288).")
     execute.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
@@ -631,10 +634,9 @@ def _run_execute_impl(args: argparse.Namespace, run_dir: Path, manifest: dict) -
         log_max_bytes=getattr(args, "log_max_bytes", None),
     )
 
-    if getattr(args, "json_output", False):
-        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
-        print()
-    else:
+    json_output = getattr(args, "json_output", False)
+
+    if not json_output:
         print(f"Execution complete:")
         print(f"  Launched: {result['launched']}")
         print(f"  Succeeded: {result['succeeded']}")
@@ -642,7 +644,60 @@ def _run_execute_impl(args: argparse.Namespace, run_dir: Path, manifest: dict) -
         if result.get("interrupted"):
             print(f"  Interrupted: yes")
 
-    return 1 if result["failed"] > 0 else 0
+    worker_exit = 1 if result["failed"] > 0 else 0
+
+    # --synthesize: run synthesis after successful worker execution
+    synth_result = None
+    if getattr(args, "synthesize", False) and worker_exit == 0 and not result.get("interrupted"):
+        # Reload status after workers completed
+        status = load_status(run_dir)
+        if status is None:
+            status = infer_status(manifest, run_dir)
+        else:
+            status = reconcile_status(status, manifest, run_dir)
+
+        readiness = check_synthesis_readiness(manifest, status, run_dir)
+        if readiness["ready"]:
+            if not json_output:
+                print()
+                print("Running synthesis...")
+            synth_result = execute_synthesis(
+                manifest=manifest,
+                status=status,
+                run_dir=run_dir,
+                executor=executor,
+                partial=False,
+                force=False,
+                timeout=config.get("timeout_seconds", 1800),
+                log_max_bytes=getattr(args, "log_max_bytes", None),
+            )
+            if not json_output:
+                if synth_result["success"]:
+                    print(f"Synthesis done: {synth_result.get('result_path', '')}")
+                else:
+                    print(f"Synthesis failed: {synth_result.get('reason', 'unknown')}")
+        else:
+            if not json_output:
+                print()
+                print("Synthesis: NOT READY")
+                for b in readiness["blockers"]:
+                    print(f"  Blocker: {b}")
+            synth_result = {
+                "success": False,
+                "state": "blocked",
+                "blockers": readiness["blockers"],
+            }
+
+    if json_output:
+        output = dict(result)
+        if synth_result is not None:
+            output["synthesis"] = synth_result
+        json.dump(output, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+
+    if synth_result is not None and not synth_result["success"]:
+        return 1
+    return worker_exit
 
 
 def _run_mark(args: argparse.Namespace) -> int:

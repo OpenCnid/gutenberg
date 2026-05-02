@@ -2,8 +2,8 @@
 
 > **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented. Post-V3 hardening pass complete.
 > **Last updated:** 2026-05-02
-> **Current baseline:** 376 tests passing (confirmed 2026-05-02).
-> **Latest validation commits:** Tag: `0.9.0` → `0.10.0`.
+> **Current baseline:** 382 tests passing (confirmed 2026-05-02).
+> **Latest validation commits:** Tag: `0.10.0` → `0.11.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -55,7 +55,12 @@ Spec compliance audit identified and fixed 5 gaps:
 1. **`status --json` per-chunk detail (spec 12):** JSON output now includes full per-chunk state, attempts, error metadata, result/task paths, synthesis status, and warnings — not just summary counts.
 2. **`--log-max-bytes` CLI flag (spec 15):** Added to `execute`, `synthesize`, and `orchestrate` commands. Overrides per-attempt log cap. Tests verify truncation behavior.
 
+### Post-V3 Hardening Pass 3 (2026-05-02)
+
+1. **`--synthesize` flag on `execute`/`orchestrate --execute` (spec 13):** Combined worker+synthesis execution. After workers succeed, checks synthesis readiness and runs synthesis automatically if ready. Includes JSON output integration.
+2. **`--dry-run` flag on `synthesize` command (spec 13):** Explicit `--dry-run` flag added as required option per spec. Default when `--execute` is absent.
+3. **Test growth:** 376 → 382 (6 new tests for both features).
+
 ## Remaining Known Items
 
-- **`gutenberg orchestrate --execute --synthesize` integration:** Spec 13 mentions optional combined worker+synthesis execution. Not implemented. `gutenberg execute` + `gutenberg synthesize` is the supported flow.
 - **`clawd` executor class:** Accepted in config validation but routes through `CommandExecutor`. Fine per spec since the executor "shells out to the binary."
