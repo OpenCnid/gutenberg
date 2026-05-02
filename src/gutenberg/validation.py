@@ -137,4 +137,58 @@ def validate_run(run_dir: Path, strict: bool = True) -> list[dict[str, Any]]:
                     f"Result file is empty: {result_file.name}",
                 ))
 
+    # 9. Task index validation (V3, only when tasks/ exists)
+    tasks_index = P.tasks_index_path(run_dir)
+    if tasks_index.exists():
+        try:
+            index_data = json.loads(tasks_index.read_text(encoding="utf-8"))
+            results.append(_check("task_index_valid_json", True, "tasks/index.json is valid JSON"))
+
+            # Check each referenced task file exists
+            workers = index_data.get("tasks", {}).get("workers", [])
+            all_task_files_ok = True
+            for w in workers:
+                tp = w.get("task_path", "")
+                if tp and not (run_dir / tp).exists():
+                    results.append(_check(
+                        "task_file_exists",
+                        False,
+                        f"Task file referenced by index not found: {tp}",
+                    ))
+                    all_task_files_ok = False
+
+            synth_tp = index_data.get("tasks", {}).get("synthesis", {}).get("task_path", "")
+            if synth_tp and not (run_dir / synth_tp).exists():
+                results.append(_check(
+                    "task_file_exists",
+                    False,
+                    f"Synthesis task file referenced by index not found: {synth_tp}",
+                ))
+                all_task_files_ok = False
+
+            if all_task_files_ok:
+                results.append(_check("task_files_exist", True, "All task files referenced by index exist"))
+
+        except (json.JSONDecodeError, ValueError) as exc:
+            results.append(_check("task_index_valid_json", False, f"tasks/index.json is not valid JSON: {exc}"))
+
+        # 10. Check for unresolved placeholders in task files
+        _PLACEHOLDERS = ("{chunk_id}", "{chunk_number}", "{total_chunks}", "{chunk_path}", "{result_path}")
+        tasks_workers = P.tasks_workers_dir(run_dir)
+        if tasks_workers.exists():
+            placeholder_problems: list[str] = []
+            for tf in sorted(tasks_workers.glob("*.worker.md")):
+                content = tf.read_text(encoding="utf-8")
+                for ph in _PLACEHOLDERS:
+                    if ph in content:
+                        placeholder_problems.append(f"{tf.name} contains {ph}")
+            if placeholder_problems:
+                results.append(_check(
+                    "task_no_placeholders",
+                    False,
+                    "Unresolved placeholders: " + "; ".join(placeholder_problems),
+                ))
+            else:
+                results.append(_check("task_no_placeholders", True, "No unresolved placeholders in task files"))
+
     return results

@@ -15,6 +15,7 @@ from gutenberg.prompts import write_prompts
 from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status
 from gutenberg.validation import validate_run
 from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
+from gutenberg.tasks import materialize_tasks, check_staleness
 from gutenberg import paths as P
 
 
@@ -54,6 +55,12 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--script", action="store_true", help="Generate a shell script for pending workers.")
     orchestrate.add_argument("--skip-failed", action="store_true", help="Skip failed chunks instead of retrying.")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    tasks = sub.add_parser("tasks", help="Materialize per-chunk task files.")
+    tasks.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    tasks.add_argument("--refresh", action="store_true", help="Regenerate all task files.")
+    tasks.add_argument("--dry-run", action="store_true", help="Show plan without writing files.")
+    tasks.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     return parser
 
@@ -327,6 +334,63 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_tasks(args: argparse.Namespace) -> int:
+    """Execute the tasks subcommand."""
+    run_dir = Path(args.run_dir)
+
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+
+    # Load status if available (for synthesis task availability info)
+    status = load_status(run_dir)
+    if status is not None:
+        status = reconcile_status(status, manifest, run_dir)
+
+    if args.dry_run:
+        stale = check_staleness(manifest, run_dir)
+        chunks = manifest.get("chunks", [])
+        total_files = len(chunks) + 2  # workers + synthesis + index
+
+        if args.json_output:
+            json.dump({
+                "dry_run": True,
+                "total_files": total_files,
+                "stale": stale,
+                "stale_count": len(stale),
+            }, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            if stale:
+                print(f"Would write/update {len(stale)} task file(s):")
+                for s in stale:
+                    print(f"  {s['task_path']} ({s['reason']})")
+            else:
+                print(f"All {total_files} task files are up to date.")
+        return 0
+
+    result = materialize_tasks(manifest, status, run_dir, refresh=args.refresh)
+
+    if args.json_output:
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        print(f"Task materialization complete:")
+        print(f"  Written: {result['written']}")
+        print(f"  Skipped (unchanged): {result['skipped']}")
+        print(f"  Total files: {result['total_files']}")
+        print(f"  Worker tasks: {result['worker_count']}")
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -340,6 +404,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": _run_status,
         "validate": _run_validate,
         "orchestrate": _run_orchestrate,
+        "tasks": _run_tasks,
     }
     handler = handlers.get(args.command)
     if handler is None:
