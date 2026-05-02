@@ -12,10 +12,11 @@ from pathlib import Path
 from gutenberg.chunking import chunk_text
 from gutenberg.manifest import build_manifest, write_manifest
 from gutenberg.prompts import write_prompts
-from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status
+from gutenberg.status import create_status, save_status, load_status, infer_status, reconcile_status, summarize_status, summarize_failures
 from gutenberg.validation import validate_run
 from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
 from gutenberg.tasks import materialize_tasks, check_staleness
+from gutenberg.lifecycle import mark_chunk, retry_chunks, skip_chunk
 from gutenberg import paths as P
 
 
@@ -39,6 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     status = sub.add_parser("status", help="Show run completion status.")
     status.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    status.add_argument("--failures", action="store_true", help="Show only failed/skipped/missing chunks.")
     status.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     validate = sub.add_parser("validate", help="Validate run directory integrity.")
@@ -55,6 +57,23 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--script", action="store_true", help="Generate a shell script for pending workers.")
     orchestrate.add_argument("--skip-failed", action="store_true", help="Skip failed chunks instead of retrying.")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    mark = sub.add_parser("mark", help="Manually set a chunk's state.")
+    mark.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    mark.add_argument("chunk_id", metavar="chunk-id", help="Chunk ID to mark.")
+    mark.add_argument("state", help="New state (pending, failed, skipped, missing, done).")
+    mark.add_argument("--reason", default=None, help="Reason (required for failed/skipped).")
+
+    retry = sub.add_parser("retry", help="Reset failed/missing/skipped chunks to pending.")
+    retry.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    retry.add_argument("--failed", action="store_true", help="Reset all failed/missing chunks.")
+    retry.add_argument("--chunk", dest="chunk_ids", action="append", default=None, help="Specific chunk ID to retry (repeatable).")
+    retry.add_argument("--force", action="store_true", help="Override max_attempts limit.")
+
+    skip = sub.add_parser("skip", help="Mark a chunk as skipped.")
+    skip.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    skip.add_argument("chunk_id", metavar="chunk-id", help="Chunk ID to skip.")
+    skip.add_argument("--reason", required=True, help="Reason for skipping.")
 
     tasks = sub.add_parser("tasks", help="Materialize per-chunk task files.")
     tasks.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
@@ -211,6 +230,27 @@ def _run_status(args: argparse.Namespace) -> int:
 
     summary = summarize_status(status)
 
+    if args.failures:
+        problems = summarize_failures(status)
+        if args.json_output:
+            json.dump(problems, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            if not problems:
+                print("No failures, skips, or missing chunks.")
+            else:
+                for p in problems:
+                    line = f"  {p['chunk_id']}: {p['state']}"
+                    if "reason" in p:
+                        line += f" — {p['reason']}"
+                    elif "last_error" in p:
+                        le = p["last_error"]
+                        line += f" — {le.get('message', le.get('code', ''))}"
+                    if "attempt_count" in p:
+                        line += f" ({p['attempt_count']} attempts)"
+                    print(line)
+        return 0 if not problems else 1
+
     if args.json_output:
         json.dump(summary, sys.stdout, indent=2, ensure_ascii=False)
         print()
@@ -237,6 +277,8 @@ def _run_status(args: argparse.Namespace) -> int:
         parts.append(f"{summary['failed']} failed")
     if summary["missing"]:
         parts.append(f"{summary['missing']} missing")
+    if summary.get("skipped"):
+        parts.append(f"{summary['skipped']} skipped")
     print(f"  {', '.join(parts)} of {summary['total']} total")
 
     return 0 if summary["run_state"] == "complete" else 1
@@ -334,6 +376,99 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_mark(args: argparse.Namespace) -> int:
+    """Execute the mark subcommand."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    try:
+        mark_chunk(status, args.chunk_id, args.state, reason=args.reason, run_dir=run_dir)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    save_status(status, run_dir)
+    print(f"Marked {args.chunk_id} as {args.state}.")
+    return 0
+
+
+def _run_retry(args: argparse.Namespace) -> int:
+    """Execute the retry subcommand."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    if not args.failed and not args.chunk_ids:
+        print("Error: Specify --failed or --chunk <chunk-id>.", file=sys.stderr)
+        return 1
+
+    reset = retry_chunks(
+        status, manifest,
+        which="failed",
+        chunk_ids=args.chunk_ids,
+        force=args.force,
+    )
+
+    if not reset:
+        print("No chunks eligible for retry.")
+    else:
+        save_status(status, run_dir)
+        print(f"Reset {len(reset)} chunk(s) to pending: {', '.join(reset)}")
+
+    return 0
+
+
+def _run_skip(args: argparse.Namespace) -> int:
+    """Execute the skip subcommand."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    try:
+        skip_chunk(status, args.chunk_id, args.reason)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    save_status(status, run_dir)
+    print(f"Skipped {args.chunk_id}: {args.reason}")
+    return 0
+
+
 def _run_tasks(args: argparse.Namespace) -> int:
     """Execute the tasks subcommand."""
     run_dir = Path(args.run_dir)
@@ -404,6 +539,9 @@ def main(argv: list[str] | None = None) -> None:
         "status": _run_status,
         "validate": _run_validate,
         "orchestrate": _run_orchestrate,
+        "mark": _run_mark,
+        "retry": _run_retry,
+        "skip": _run_skip,
         "tasks": _run_tasks,
     }
     handler = handlers.get(args.command)

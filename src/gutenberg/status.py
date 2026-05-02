@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from gutenberg import paths as P
 
-CHUNK_STATES = ("pending", "running", "done", "failed", "missing")
+CHUNK_STATES = ("pending", "running", "done", "failed", "missing", "skipped")
 RUN_STATES = ("ingested", "in_progress", "complete", "partial")
 
 
@@ -40,11 +41,13 @@ def load_status(run_dir: Path) -> dict[str, Any] | None:
 
 
 def save_status(status: dict[str, Any], run_dir: Path) -> Path:
-    """Write ``status.json`` to *run_dir*."""
+    """Write ``status.json`` to *run_dir* atomically."""
     p = P.status_path(run_dir)
-    with open(p, "w", encoding="utf-8") as f:
+    tmp = p.with_suffix(".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(status, f, indent=2, ensure_ascii=False)
         f.write("\n")
+    os.replace(tmp, p)
     return p
 
 
@@ -71,7 +74,7 @@ def compute_run_state(status: dict[str, Any]) -> str:
         return "ingested"
     if states == {"done"}:
         return "complete"
-    if "done" in states and states <= {"done", "failed", "missing"}:
+    if "done" in states and states <= {"done", "failed", "missing", "skipped"}:
         return "partial"
     return "in_progress"
 
@@ -106,26 +109,37 @@ def infer_status(manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
 def reconcile_status(status: dict[str, Any], manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Reconcile status.json with filesystem reality.
 
-    If a result file exists and is non-empty but status says 'pending',
-    promote to 'done'. If status says 'done' but no result file, demote
-    to 'pending'. This keeps status accurate when workers write results
-    without updating status.json.
+    Handles V3 states: promotes valid results to done, demotes missing results,
+    and adds missing chunks from manifest.
     """
     changed = False
+    now = datetime.now(timezone.utc).isoformat()
+
     for c in manifest.get("chunks", []):
         cid = c["id"]
         if cid not in status["chunks"]:
+            # Manifest chunk missing from status — add as pending or done
+            result_file = P.worker_result_path(run_dir, cid)
+            has_result = result_file.exists() and result_file.stat().st_size > 0
+            state = "done" if has_result else "pending"
+            status["chunks"][cid] = {
+                "state": state,
+                "transitions": [{"state": state, "timestamp": now}],
+            }
+            changed = True
             continue
+
         entry = status["chunks"][cid]
         result_file = P.worker_result_path(run_dir, cid)
         has_result = result_file.exists() and result_file.stat().st_size > 0
 
-        if has_result and entry["state"] == "pending":
+        if has_result and entry["state"] in ("pending", "missing", "running"):
             update_chunk_state(status, cid, "done")
             changed = True
         elif not has_result and entry["state"] == "done":
-            update_chunk_state(status, cid, "pending")
+            update_chunk_state(status, cid, "missing")
             changed = True
+        # skipped state is preserved — don't promote even if result exists
 
     if changed:
         status["run_state"] = compute_run_state(status)
@@ -150,3 +164,23 @@ def _summarize(chunks: dict[str, Any]) -> dict[str, int]:
         counts[s] = counts.get(s, 0) + 1
     counts["total"] = len(chunks)
     return counts
+
+
+def summarize_failures(status: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return details for failed/skipped/missing chunks."""
+    problems: list[dict[str, Any]] = []
+    for cid, entry in status.get("chunks", {}).items():
+        if entry["state"] in ("failed", "skipped", "missing"):
+            info: dict[str, Any] = {
+                "chunk_id": cid,
+                "state": entry["state"],
+            }
+            if "last_error" in entry:
+                info["last_error"] = entry["last_error"]
+            if "reason" in entry:
+                info["reason"] = entry["reason"]
+            attempts = entry.get("attempts", [])
+            if attempts:
+                info["attempt_count"] = len(attempts)
+            problems.append(info)
+    return problems
