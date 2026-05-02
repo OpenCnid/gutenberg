@@ -15,6 +15,77 @@ from gutenberg.status import load_status, summarize_status, summarize_failures
 
 
 # ---------------------------------------------------------------------------
+# Log size constants
+# ---------------------------------------------------------------------------
+
+DEFAULT_MAX_LOG_BYTES = 524_288      # 512KB per attempt
+DEFAULT_MAX_RUN_LOG_BYTES = 5_242_880  # 5MB total per run
+TRUNCATION_MARKER = "\n[TRUNCATED — original {original} bytes, truncated to {kept} bytes]\n"
+
+
+def get_log_limits(manifest: dict[str, Any] | None = None) -> tuple[int, int]:
+    """Return ``(per_attempt_max, per_run_max)`` from manifest or defaults."""
+    per_attempt = DEFAULT_MAX_LOG_BYTES
+    per_run = DEFAULT_MAX_RUN_LOG_BYTES
+    if manifest:
+        executor = manifest.get("executor", {})
+        per_attempt = executor.get("max_log_bytes", per_attempt)
+        per_run = executor.get("max_run_log_bytes", per_run)
+    return per_attempt, per_run
+
+
+def enforce_run_log_cap(run_dir: Path, max_run_bytes: int = DEFAULT_MAX_RUN_LOG_BYTES) -> list[str]:
+    """Enforce per-run total log cap by truncating oldest attempt logs.
+
+    Walks ``logs/workers/`` and ``logs/synthesis/``, sorted oldest-first.
+    When the total exceeds *max_run_bytes*, truncates the oldest logs
+    (preserving the tail) until the total is under the cap.
+
+    Returns list of paths that were truncated.
+    """
+    logs_root = P.logs_dir(run_dir)
+    if not logs_root.exists():
+        return []
+
+    # Collect all attempt log files with mtime
+    log_files: list[tuple[float, Path]] = []
+    for subdir in (P.logs_workers_dir(run_dir), P.logs_synthesis_dir(run_dir)):
+        if subdir.exists():
+            for f in subdir.iterdir():
+                if f.is_file() and f.suffix == ".log":
+                    log_files.append((f.stat().st_mtime, f))
+
+    if not log_files:
+        return []
+
+    # Sort oldest first
+    log_files.sort(key=lambda x: x[0])
+
+    total = sum(f.stat().st_size for _, f in log_files)
+    if total <= max_run_bytes:
+        return []
+
+    truncated: list[str] = []
+    for _, log_path in log_files:
+        if total <= max_run_bytes:
+            break
+        size = log_path.stat().st_size
+        if size == 0:
+            continue
+        # Read the tail (keep last ~1KB for context)
+        content = log_path.read_text(encoding="utf-8", errors="replace")
+        keep_bytes = min(1024, len(content))
+        tail = content[-keep_bytes:]
+        marker = TRUNCATION_MARKER.format(original=len(content), kept=keep_bytes)
+        log_path.write_text(marker + tail, encoding="utf-8")
+        new_size = log_path.stat().st_size
+        total -= (size - new_size)
+        truncated.append(str(log_path.relative_to(run_dir)))
+
+    return truncated
+
+
+# ---------------------------------------------------------------------------
 # Event log
 # ---------------------------------------------------------------------------
 

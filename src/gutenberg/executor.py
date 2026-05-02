@@ -23,7 +23,7 @@ from gutenberg.lifecycle import (
     validate_worker_result,
     resolve_stale_running,
 )
-from gutenberg.reporting import append_event, write_orchestration_summary
+from gutenberg.reporting import append_event, write_orchestration_summary, get_log_limits, enforce_run_log_cap
 from gutenberg.status import (
     load_status,
     save_status,
@@ -274,6 +274,8 @@ def execute_workers(
         "chunks": {},
     }
 
+    per_attempt_max, per_run_max = get_log_limits(manifest)
+
     def _write_attempt_log(
         cid: str, attempt_num: int, result: ExecutorResult,
     ) -> str | None:
@@ -287,10 +289,12 @@ def execute_workers(
         if result.error_message:
             lines.append(f"Error: {result.error_message}")
         log_content = "\n".join(lines)
-        # Bound to 512KB per spec 15
-        if len(log_content.encode("utf-8")) > 524288:
-            log_content = log_content[:524288] + "\n[TRUNCATED]"
+        # Bound per-attempt log to configured limit (default 512KB)
+        if len(log_content.encode("utf-8")) > per_attempt_max:
+            log_content = log_content[:per_attempt_max] + "\n[TRUNCATED]"
         log_path.write_text(log_content, encoding="utf-8")
+        # Enforce run-level cap
+        enforce_run_log_cap(run_dir, per_run_max)
         return str(log_path.relative_to(run_dir))
 
     def _process_chunk(chunk: dict[str, Any]) -> dict[str, Any]:

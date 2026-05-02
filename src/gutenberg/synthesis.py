@@ -18,7 +18,7 @@ from gutenberg.lifecycle import (
     record_attempt_failure,
     validate_worker_result,
 )
-from gutenberg.reporting import append_event
+from gutenberg.reporting import append_event, get_log_limits, enforce_run_log_cap
 from gutenberg.status import save_status
 from gutenberg.tasks import generate_synthesis_task
 
@@ -220,6 +220,7 @@ def execute_synthesis(
     )
 
     # Write per-attempt synthesis log
+    per_attempt_max, per_run_max = get_log_limits(manifest)
     synth_log_path = P.synthesis_log_path(run_dir, attempt_num)
     synth_log_path.parent.mkdir(parents=True, exist_ok=True)
     log_lines: list[str] = [
@@ -230,9 +231,10 @@ def execute_synthesis(
     if result.error_message:
         log_lines.append(f"Error: {result.error_message}")
     log_content = "\n".join(log_lines)
-    if len(log_content.encode("utf-8")) > 524288:
-        log_content = log_content[:524288] + "\n[TRUNCATED]"
+    if len(log_content.encode("utf-8")) > per_attempt_max:
+        log_content = log_content[:per_attempt_max] + "\n[TRUNCATED]"
     synth_log_path.write_text(log_content, encoding="utf-8")
+    enforce_run_log_cap(run_dir, per_run_max)
     log_rel = str(synth_log_path.relative_to(run_dir))
 
     # Validate output

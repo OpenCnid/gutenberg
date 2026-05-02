@@ -14,6 +14,10 @@ from gutenberg.reporting import (
     format_report_markdown,
     format_report_json,
     write_reports,
+    get_log_limits,
+    enforce_run_log_cap,
+    DEFAULT_MAX_LOG_BYTES,
+    DEFAULT_MAX_RUN_LOG_BYTES,
 )
 from gutenberg.status import (
     create_status,
@@ -398,3 +402,100 @@ class TestValidationArtifacts:
         report_check = next((c for c in checks if c["check"] == "report_json_valid"), None)
         assert report_check is not None
         assert report_check["passed"]
+
+
+# ---------------------------------------------------------------------------
+# Log limits and run cap
+# ---------------------------------------------------------------------------
+
+class TestLogLimits:
+    def test_default_limits(self):
+        per_att, per_run = get_log_limits()
+        assert per_att == DEFAULT_MAX_LOG_BYTES
+        assert per_run == DEFAULT_MAX_RUN_LOG_BYTES
+
+    def test_defaults_are_correct(self):
+        assert DEFAULT_MAX_LOG_BYTES == 524_288
+        assert DEFAULT_MAX_RUN_LOG_BYTES == 5_242_880
+
+    def test_manifest_override(self):
+        manifest = {
+            "executor": {
+                "max_log_bytes": 1024,
+                "max_run_log_bytes": 10240,
+            }
+        }
+        per_att, per_run = get_log_limits(manifest)
+        assert per_att == 1024
+        assert per_run == 10240
+
+    def test_partial_manifest_override(self):
+        manifest = {"executor": {"max_log_bytes": 2048}}
+        per_att, per_run = get_log_limits(manifest)
+        assert per_att == 2048
+        assert per_run == DEFAULT_MAX_RUN_LOG_BYTES
+
+
+class TestRunLogCap:
+    def test_no_truncation_under_cap(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        logs_dir = P.logs_workers_dir(run_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        (logs_dir / "chunk-0001.attempt-001.log").write_text("small log\n")
+        truncated = enforce_run_log_cap(run_dir, max_run_bytes=1_000_000)
+        assert truncated == []
+
+    def test_truncation_over_cap(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        logs_dir = P.logs_workers_dir(run_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write three 500-byte logs (total 1500 bytes)
+        for i in range(3):
+            (logs_dir / f"chunk-000{i+1}.attempt-001.log").write_text(
+                "X" * 500, encoding="utf-8"
+            )
+
+        # Cap at 1000 bytes — should truncate at least one
+        truncated = enforce_run_log_cap(run_dir, max_run_bytes=1000)
+        assert len(truncated) >= 1
+
+        # Truncated files should contain truncation marker
+        for rel_path in truncated:
+            content = (run_dir / rel_path).read_text(encoding="utf-8")
+            assert "TRUNCATED" in content
+
+    def test_truncation_preserves_tail(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        logs_dir = P.logs_workers_dir(run_dir)
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
+        # Write log with identifiable tail
+        content = "A" * 2000 + "TAIL_MARKER"
+        (logs_dir / "chunk-0001.attempt-001.log").write_text(content, encoding="utf-8")
+
+        truncated = enforce_run_log_cap(run_dir, max_run_bytes=500)
+        assert len(truncated) == 1
+        result = (logs_dir / "chunk-0001.attempt-001.log").read_text(encoding="utf-8")
+        assert "TAIL_MARKER" in result
+
+    def test_no_logs_dir(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        # No logs dir at all
+        truncated = enforce_run_log_cap(run_dir, max_run_bytes=100)
+        assert truncated == []
+
+    def test_synthesis_logs_included(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        synth_logs = P.logs_synthesis_dir(run_dir)
+        synth_logs.mkdir(parents=True, exist_ok=True)
+        (synth_logs / "attempt-001.log").write_text("X" * 2000, encoding="utf-8")
+
+        truncated = enforce_run_log_cap(run_dir, max_run_bytes=500)
+        assert len(truncated) == 1
+        assert "synthesis" in truncated[0]
