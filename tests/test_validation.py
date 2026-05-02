@@ -352,3 +352,29 @@ class TestValidateWorkerSections:
         assert section_check is not None
         assert section_check["passed"]  # warning-level, still passes
         assert "missing" in section_check["detail"].lower()
+
+
+class TestValidateUnknownChunks:
+    def test_unknown_chunks_reported(self, tmp_path, capsys):
+        """Validation detects chunks in status.json not present in manifest."""
+        run_dir = _ingest(tmp_path)
+        status = load_status(run_dir)
+        # Add a fake chunk to status
+        status["chunks"]["chunk-9999"] = {
+            "state": "pending",
+            "transitions": [{"state": "pending", "timestamp": "2026-01-01T00:00:00+00:00"}],
+        }
+        save_status(status, run_dir)
+
+        capsys.readouterr()
+        try:
+            main(["validate", str(run_dir), "--json"])
+        except SystemExit:
+            pass
+
+        captured = capsys.readouterr()
+        checks = json.loads(captured.out)
+        unknown_check = next((c for c in checks if c["check"] == "status_unknown_chunks"), None)
+        assert unknown_check is not None
+        assert unknown_check["passed"]  # warning-level
+        assert "chunk-9999" in unknown_check["detail"]

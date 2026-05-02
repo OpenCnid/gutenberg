@@ -121,6 +121,16 @@ def validate_run(run_dir: Path, strict: bool = True) -> list[dict[str, Any]]:
         if status_ok:
             results.append(_check("status_consistency", True, "status.json consistent with filesystem"))
 
+        # 6b. Unknown chunks in status (not in manifest)
+        manifest_ids = {c.get("id") for c in chunks}
+        unknown = sorted(set(status.get("chunks", {}).keys()) - manifest_ids)
+        if unknown:
+            results.append(_check(
+                "status_unknown_chunks",
+                True,  # warning-level: pass but report
+                f"Status contains chunks not in manifest: {', '.join(unknown[:10])}",
+            ))
+
     # 7. Results directory exists
     rdir = manifest.get("results", {}).get("directory", "")
     if rdir:

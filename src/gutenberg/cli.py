@@ -332,6 +332,13 @@ def _run_status(args: argparse.Namespace) -> int:
         parts.append(f"{summary['skipped']} skipped")
     print(f"  {', '.join(parts)} of {summary['total']} total")
 
+    # Show warnings (e.g. unknown chunks in status)
+    warnings = status.get("_warnings", [])
+    if warnings:
+        print()
+        for w in warnings:
+            print(f"  Warning: {w}")
+
     return 0 if summary["run_state"] == "complete" else 1
 
 
