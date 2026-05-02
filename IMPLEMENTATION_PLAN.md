@@ -1,9 +1,9 @@
 # Implementation Plan — Gutenberg V3
 
-> **Status:** V1 complete. V2 complete. V3 Slice 1 (Spec 14) complete. Slice 2 (Spec 12) next.
+> **Status:** V1 complete. V2 complete. V3 Slices 1-2 complete. Slice 3 (Spec 11) next.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 206 tests passing (confirmed 2026-05-01).
-> **Latest validation commits:** `9121f71` (spec 14 task materialization).
+> **Current baseline:** 262 tests passing (confirmed 2026-05-01).
+> **Latest validation commits:** `8dd6e65` (spec 12 worker lifecycle).
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -59,6 +59,15 @@
 - Extended `validation.py`: task index JSON check, task file existence, unresolved placeholder detection.
 - 40 new tests. Total: 206 passing.
 - Commit: `9121f71`.
+
+### V3 Slice 2 Complete (2026-05-01)
+
+- **Spec 12 — Worker Lifecycle, Retry, Failure, and Resume** fully implemented.
+- New module: `src/gutenberg/lifecycle.py` — attempt management, result validation, stale-running reconciliation, mark/retry/skip operations.
+- Extended `status.py`: `skipped` state, atomic writes via `os.replace`, enhanced `reconcile_status` (V3 states), `summarize_failures`.
+- New CLI subcommands: `gutenberg mark`, `gutenberg retry`, `gutenberg skip`, `gutenberg status --failures`.
+- 56 new tests. Total: 262 passing.
+- Commit: `8dd6e65`.
 
 ## V3 Goal
 
