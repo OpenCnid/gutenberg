@@ -18,6 +18,7 @@ from gutenberg.lifecycle import (
     record_attempt_failure,
     validate_worker_result,
 )
+from gutenberg.reporting import append_event
 from gutenberg.status import save_status
 from gutenberg.tasks import generate_synthesis_task
 
@@ -205,12 +206,34 @@ def execute_synthesis(
     synth_entry["attempts"].append(attempt)
     save_status(status, run_dir)
 
+    append_event(run_dir, {
+        "event": "synthesis_started",
+        "attempt": attempt_num,
+        "partial": partial,
+    })
+
     # Launch executor
     result = executor.launch(
         task_path=str(synth_task_path),
         result_path=str(synth_result_path),
         timeout=timeout,
     )
+
+    # Write per-attempt synthesis log
+    synth_log_path = P.synthesis_log_path(run_dir, attempt_num)
+    synth_log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_lines: list[str] = [
+        f"Synthesis attempt {attempt_num}",
+        f"Exit code: {result.exit_code}",
+        f"Success: {result.success}",
+    ]
+    if result.error_message:
+        log_lines.append(f"Error: {result.error_message}")
+    log_content = "\n".join(log_lines)
+    if len(log_content.encode("utf-8")) > 524288:
+        log_content = log_content[:524288] + "\n[TRUNCATED]"
+    synth_log_path.write_text(log_content, encoding="utf-8")
+    log_rel = str(synth_log_path.relative_to(run_dir))
 
     # Validate output
     if result.success:
@@ -219,7 +242,7 @@ def execute_synthesis(
             record_attempt_success(
                 attempt,
                 result_path=str(synth_result_path.relative_to(run_dir)),
-                log_path=result.log_path,
+                log_path=log_rel,
             )
             if partial:
                 synth_entry["state"] = "partial"
@@ -231,6 +254,12 @@ def execute_synthesis(
             synth_entry["available_results"] = readiness["available_results"]
             synth_entry["missing_chunks"] = readiness["missing_chunks"]
             save_status(status, run_dir)
+
+            append_event(run_dir, {
+                "event": "synthesis_done",
+                "attempt": attempt_num,
+                "state": synth_entry["state"],
+            })
 
             return {
                 "success": True,
@@ -246,7 +275,7 @@ def execute_synthesis(
                 error_code=err or "invalid_result",
                 error_message=f"Synthesis validation failed: {err}",
                 exit_code=result.exit_code,
-                log_path=result.log_path,
+                log_path=log_rel,
             )
             synth_entry["state"] = "failed"
             synth_entry["last_error"] = {
@@ -254,6 +283,12 @@ def execute_synthesis(
                 "message": f"Synthesis validation failed: {err}",
             }
             save_status(status, run_dir)
+
+            append_event(run_dir, {
+                "event": "synthesis_failed",
+                "attempt": attempt_num,
+                "error": err or "invalid_result",
+            })
 
             return {
                 "success": False,
@@ -267,7 +302,7 @@ def execute_synthesis(
             error_code=error_code,
             error_message=result.error_message or "Unknown error",
             exit_code=result.exit_code,
-            log_path=result.log_path,
+            log_path=log_rel,
         )
         synth_entry["state"] = "failed"
         synth_entry["last_error"] = {
@@ -275,6 +310,12 @@ def execute_synthesis(
             "message": result.error_message or "Unknown error",
         }
         save_status(status, run_dir)
+
+        append_event(run_dir, {
+            "event": "synthesis_failed",
+            "attempt": attempt_num,
+            "error": error_code,
+        })
 
         return {
             "success": False,

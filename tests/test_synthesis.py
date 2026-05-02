@@ -417,3 +417,92 @@ class TestValidationSynthesis:
         synth_check = next((c for c in checks if c["check"] == "synthesis_consistency"), None)
         assert synth_check is not None
         assert synth_check["passed"]
+
+
+# ---------------------------------------------------------------------------
+# Event logging and log file integration (spec 15)
+# ---------------------------------------------------------------------------
+
+class TestSynthesisEventLogging:
+    """Verify synthesis execution emits lifecycle events."""
+
+    def test_events_on_success(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest, all_done=True)
+        status = load_status(run_dir)
+
+        script = _make_synth_script(tmp_path)
+        executor = CommandExecutor(command=[str(script), "{result_path}"])
+
+        execute_synthesis(manifest, status, run_dir, executor)
+
+        from gutenberg.reporting import read_events
+        events = read_events(run_dir)
+        started = [e for e in events if e["event"] == "synthesis_started"]
+        done = [e for e in events if e["event"] == "synthesis_done"]
+        assert len(started) == 1
+        assert len(done) == 1
+
+    def test_events_on_failure(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest, all_done=True)
+        status = load_status(run_dir)
+
+        script = _make_failing_synth_script(tmp_path)
+        executor = CommandExecutor(command=[str(script)])
+
+        execute_synthesis(manifest, status, run_dir, executor)
+
+        from gutenberg.reporting import read_events
+        events = read_events(run_dir)
+        failed = [e for e in events if e["event"] == "synthesis_failed"]
+        assert len(failed) == 1
+
+
+class TestSynthesisLogFiles:
+    """Verify per-attempt synthesis log files are written."""
+
+    def test_log_file_on_success(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest, all_done=True)
+        status = load_status(run_dir)
+
+        script = _make_synth_script(tmp_path)
+        executor = CommandExecutor(command=[str(script), "{result_path}"])
+
+        execute_synthesis(manifest, status, run_dir, executor)
+
+        log_file = P.synthesis_log_path(run_dir, 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "Synthesis attempt 1" in content
+
+    def test_log_file_on_failure(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest, all_done=True)
+        status = load_status(run_dir)
+
+        script = _make_failing_synth_script(tmp_path)
+        executor = CommandExecutor(command=[str(script)])
+
+        execute_synthesis(manifest, status, run_dir, executor)
+
+        log_file = P.synthesis_log_path(run_dir, 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "Success: False" in content
+
+    def test_log_path_recorded_in_status(self, tmp_path):
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest, all_done=True)
+        status = load_status(run_dir)
+
+        script = _make_synth_script(tmp_path)
+        executor = CommandExecutor(command=[str(script), "{result_path}"])
+
+        execute_synthesis(manifest, status, run_dir, executor)
+
+        status = load_status(run_dir)
+        assert len(status["synthesis"]["attempts"]) == 1
+        assert status["synthesis"]["attempts"][0].get("log_path") is not None
+        assert "logs/synthesis/" in status["synthesis"]["attempts"][0]["log_path"]

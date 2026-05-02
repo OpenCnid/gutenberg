@@ -23,6 +23,7 @@ from gutenberg.lifecycle import (
     validate_worker_result,
     resolve_stale_running,
 )
+from gutenberg.reporting import append_event, write_orchestration_summary
 from gutenberg.status import (
     load_status,
     save_status,
@@ -272,6 +273,25 @@ def execute_workers(
         "chunks": {},
     }
 
+    def _write_attempt_log(
+        cid: str, attempt_num: int, result: ExecutorResult,
+    ) -> str | None:
+        """Write a bounded per-attempt log file. Returns relative log path."""
+        log_path = P.worker_log_path(run_dir, cid, attempt_num)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        lines: list[str] = []
+        lines.append(f"Worker attempt {attempt_num} for {cid}")
+        lines.append(f"Exit code: {result.exit_code}")
+        lines.append(f"Success: {result.success}")
+        if result.error_message:
+            lines.append(f"Error: {result.error_message}")
+        log_content = "\n".join(lines)
+        # Bound to 512KB per spec 15
+        if len(log_content.encode("utf-8")) > 524288:
+            log_content = log_content[:524288] + "\n[TRUNCATED]"
+        log_path.write_text(log_content, encoding="utf-8")
+        return str(log_path.relative_to(run_dir))
+
     def _process_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
         """Process a single chunk. Returns per-chunk result."""
         cid = chunk["id"]
@@ -286,10 +306,15 @@ def execute_workers(
         if "attempts" not in entry:
             entry["attempts"] = []
 
-        # Mark running
+        # Mark running and emit event
         update_chunk_state(status, cid, "running")
         entry["attempts"].append(attempt)
         save_status(status, run_dir)
+        append_event(run_dir, {
+            "event": "worker_started",
+            "chunk_id": cid,
+            "attempt": attempt_num,
+        })
 
         # Launch
         result = executor.launch(
@@ -298,6 +323,9 @@ def execute_workers(
             timeout=timeout,
         )
 
+        # Write per-attempt log
+        log_rel = _write_attempt_log(cid, attempt_num, result)
+
         # Validate result
         if result.success:
             valid, err = validate_worker_result(result_path)
@@ -305,10 +333,15 @@ def execute_workers(
                 record_attempt_success(
                     attempt,
                     result_path=str(result_path.relative_to(run_dir)),
-                    log_path=result.log_path,
+                    log_path=log_rel,
                 )
                 update_chunk_state(status, cid, "done")
                 entry["result_path"] = str(result_path.relative_to(run_dir))
+                append_event(run_dir, {
+                    "event": "worker_done",
+                    "chunk_id": cid,
+                    "attempt": attempt_num,
+                })
                 return {"chunk_id": cid, "state": "done"}
             else:
                 record_attempt_failure(
@@ -316,13 +349,19 @@ def execute_workers(
                     error_code=err or "invalid_result",
                     error_message=f"Result validation failed: {err}",
                     exit_code=result.exit_code,
-                    log_path=result.log_path,
+                    log_path=log_rel,
                 )
                 update_chunk_state(status, cid, "failed")
                 entry["last_error"] = {
                     "code": err or "invalid_result",
                     "message": f"Result validation failed: {err}",
                 }
+                append_event(run_dir, {
+                    "event": "worker_failed",
+                    "chunk_id": cid,
+                    "attempt": attempt_num,
+                    "error": err or "invalid_result",
+                })
                 return {"chunk_id": cid, "state": "failed", "error": err}
         else:
             error_code = "executor_exit_nonzero" if result.exit_code else "executor_error"
@@ -331,13 +370,19 @@ def execute_workers(
                 error_code=error_code,
                 error_message=result.error_message or "Unknown error",
                 exit_code=result.exit_code,
-                log_path=result.log_path,
+                log_path=log_rel,
             )
             update_chunk_state(status, cid, "failed")
             entry["last_error"] = {
                 "code": error_code,
                 "message": result.error_message or "Unknown error",
             }
+            append_event(run_dir, {
+                "event": "worker_failed",
+                "chunk_id": cid,
+                "attempt": attempt_num,
+                "error": error_code,
+            })
             return {"chunk_id": cid, "state": "failed", "error": result.error_message}
 
     try:
@@ -384,5 +429,7 @@ def execute_workers(
         signal.signal(signal.SIGTERM, original_sigterm)
         # Final status save
         save_status(status, run_dir)
+        # Write orchestration summary
+        write_orchestration_summary(manifest, status, run_dir)
 
     return summary

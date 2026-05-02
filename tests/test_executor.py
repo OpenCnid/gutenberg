@@ -568,3 +568,163 @@ class TestCLIExecute:
         manifest = json.loads(P.manifest_path(run_dir).read_text(encoding="utf-8"))
         for c in manifest["chunks"]:
             assert status["chunks"][c["id"]]["state"] == "done"
+
+
+# ---------------------------------------------------------------------------
+# Event logging, attempt logs, and orchestration.json integration tests
+# ---------------------------------------------------------------------------
+
+class TestExecutionEventLogging:
+    """Verify that execute_workers emits lifecycle events to events.jsonl."""
+
+    def test_events_emitted_on_success(self, tmp_path):
+        manifest = _make_manifest(2)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        from gutenberg.reporting import read_events
+        events = read_events(run_dir)
+        # Should have start + done events for each chunk
+        started = [e for e in events if e["event"] == "worker_started"]
+        done = [e for e in events if e["event"] == "worker_done"]
+        assert len(started) == 2
+        assert len(done) == 2
+        # Check ordering: started before done for each chunk
+        assert events[0]["event"] == "worker_started"
+        assert events[1]["event"] == "worker_done"
+
+    def test_events_emitted_on_failure(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_failing_script(tmp_path)
+        executor = CommandExecutor(command=[str(script)])
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        from gutenberg.reporting import read_events
+        events = read_events(run_dir)
+        started = [e for e in events if e["event"] == "worker_started"]
+        failed = [e for e in events if e["event"] == "worker_failed"]
+        assert len(started) == 1
+        assert len(failed) == 1
+        assert failed[0]["chunk_id"] == "chunk-0001"
+        assert "error" in failed[0]
+
+
+class TestAttemptLogFiles:
+    """Verify that per-attempt log files are written under logs/workers/."""
+
+    def test_log_files_written_on_success(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        log_file = P.worker_log_path(run_dir, "chunk-0001", 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "Worker attempt 1 for chunk-0001" in content
+        assert "Success: True" in content
+
+    def test_log_files_written_on_failure(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_failing_script(tmp_path)
+        executor = CommandExecutor(command=[str(script)])
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        log_file = P.worker_log_path(run_dir, "chunk-0001", 1)
+        assert log_file.exists()
+        content = log_file.read_text(encoding="utf-8")
+        assert "Success: False" in content
+        assert "Error:" in content
+
+    def test_attempt_log_path_recorded_in_status(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        status = load_status(run_dir)
+        entry = status["chunks"]["chunk-0001"]
+        assert len(entry["attempts"]) == 1
+        assert entry["attempts"][0].get("log_path") is not None
+        assert "logs/workers/" in entry["attempts"][0]["log_path"]
+
+
+class TestOrchestrationJsonWritten:
+    """Verify orchestration.json is written after execute_workers."""
+
+    def test_orchestration_json_created(self, tmp_path):
+        manifest = _make_manifest(2)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+        )
+
+        status = load_status(run_dir)
+        execute_workers(manifest, status, run_dir, executor)
+
+        orch_path = P.orchestration_json_path(run_dir)
+        assert orch_path.exists()
+        data = json.loads(orch_path.read_text(encoding="utf-8"))
+        assert data["schema_version"] == "1.0"
+        assert data["workers"]["done"] == 2
+
+    def test_orchestration_json_after_partial(self, tmp_path):
+        manifest = _make_manifest(2)
+        run_dir = _setup_run(tmp_path, manifest)
+
+        # Make chunk-0001 fail and chunk-0002 succeed
+        fail_script = _make_failing_script(tmp_path)
+        success_script = _make_fake_worker_script(tmp_path)
+
+        # First run only chunk-0001 with failing script
+        executor_fail = CommandExecutor(command=[str(fail_script)])
+        status = load_status(run_dir)
+        execute_workers(
+            manifest, status, run_dir, executor_fail,
+            only=["chunk-0001"],
+        )
+
+        # Then run chunk-0002 with success
+        executor_ok = CommandExecutor(
+            command=[str(success_script), "{result_path}"],
+        )
+        status = load_status(run_dir)
+        execute_workers(
+            manifest, status, run_dir, executor_ok,
+            only=["chunk-0002"],
+        )
+
+        orch_path = P.orchestration_json_path(run_dir)
+        assert orch_path.exists()
+        data = json.loads(orch_path.read_text(encoding="utf-8"))
+        assert data["workers"]["done"] == 1
+        assert data["workers"]["failed"] == 1

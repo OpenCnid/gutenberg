@@ -2,7 +2,7 @@
 
 > **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 330 tests passing (confirmed 2026-05-01).
+> **Current baseline:** 342 tests passing (confirmed 2026-05-01).
 > **Latest validation commits:** `128a71a` (spec 15 reporting). Tag: `0.7.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
@@ -96,6 +96,14 @@
 - 22 new tests. Total: 330 passing.
 - Commit: `128a71a`.
 
+
+### V3 Slice 6: Execution Wiring (2026-05-01)
+
+- **Event logging integration**: `execute_workers` and `execute_synthesis` now emit lifecycle events to `logs/events.jsonl` via `append_event`. Events: `worker_started`, `worker_done`, `worker_failed`, `synthesis_started`, `synthesis_done`, `synthesis_failed`.
+- **Per-attempt log files**: Each worker attempt writes a bounded (512KB) log file to `logs/workers/{chunk_id}.attempt-{NNN}.log`. Each synthesis attempt writes to `logs/synthesis/attempt-{NNN}.log`. Log paths are recorded in status attempt entries.
+- **Orchestration summary**: `execute_workers` now writes `orchestration.json` after every execution via `write_orchestration_summary`.
+- **12 new tests** covering event emission, log file creation, log path recording in status, and orchestration.json generation.
+- **Test growth:** 330 → 342 tests.
 ### V3 Summary
 
 - **All 5 V3 specs implemented** in recommended order (14 → 12 → 11 → 13 → 15).
