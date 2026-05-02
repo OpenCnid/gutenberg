@@ -21,6 +21,7 @@ from gutenberg.lifecycle import (
     record_attempt_success,
     record_attempt_failure,
     validate_worker_result,
+    get_max_attempts,
 )
 from gutenberg.reporting import append_event, write_orchestration_summary, get_log_limits, enforce_run_log_cap
 from gutenberg.status import (
@@ -234,6 +235,7 @@ def execute_workers(
     # Build eligible queue
     chunks = manifest.get("chunks", [])
     eligible: list[dict[str, Any]] = []
+    max_attempts = get_max_attempts(manifest)
 
     for chunk in chunks:
         cid = chunk["id"]
@@ -248,7 +250,10 @@ def execute_workers(
         if state in ("pending", "missing"):
             eligible.append(chunk)
         elif state == "failed" and retry_failed:
-            eligible.append(chunk)
+            # Respect max_attempts — don't retry if already at limit
+            attempt_count = len(entry.get("attempts", []))
+            if attempt_count < max_attempts:
+                eligible.append(chunk)
         # done, skipped, running — skip
 
     # Shutdown flag

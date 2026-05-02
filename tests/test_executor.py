@@ -728,3 +728,64 @@ class TestOrchestrationJsonWritten:
         data = json.loads(orch_path.read_text(encoding="utf-8"))
         assert data["workers"]["done"] == 1
         assert data["workers"]["failed"] == 1
+
+
+class TestMaxAttemptsRespected:
+    def test_retry_failed_respects_max_attempts(self, tmp_path):
+        """Spec 12: chunk at max_attempts not retried automatically."""
+        manifest = _make_manifest(1)
+        manifest["executor"] = {"max_attempts": 2}
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        # Simulate 2 prior failed attempts (at max)
+        cid = "chunk-0001"
+        update_chunk_state(status, cid, "failed")
+        status["chunks"][cid]["attempts"] = [
+            {"attempt": 1, "state": "failed"},
+            {"attempt": 2, "state": "failed"},
+        ]
+        save_status(status, run_dir)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+            output_mode="file",
+        )
+
+        status = load_status(run_dir)
+        result = execute_workers(
+            manifest, status, run_dir, executor,
+            retry_failed=True,
+        )
+        # Should not have launched anything
+        assert result["launched"] == 0
+        assert result["succeeded"] == 0
+
+    def test_retry_failed_launches_below_max(self, tmp_path):
+        """Failed chunk below max_attempts is retried with --retry-failed."""
+        manifest = _make_manifest(1)
+        manifest["executor"] = {"max_attempts": 3}
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        cid = "chunk-0001"
+        update_chunk_state(status, cid, "failed")
+        status["chunks"][cid]["attempts"] = [
+            {"attempt": 1, "state": "failed"},
+        ]
+        save_status(status, run_dir)
+
+        script = _make_fake_worker_script(tmp_path)
+        executor = CommandExecutor(
+            command=[str(script), "{result_path}"],
+            output_mode="file",
+        )
+
+        status = load_status(run_dir)
+        result = execute_workers(
+            manifest, status, run_dir, executor,
+            retry_failed=True,
+        )
+        assert result["launched"] == 1
+        assert result["succeeded"] == 1
