@@ -3,7 +3,7 @@
 > **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented.
 > **Last updated:** 2026-05-01
 > **Current baseline:** 348 tests passing (confirmed 2026-05-01).
-> **Latest validation commits:** `128a71a` (spec 15 reporting). Tag: `0.7.0`.
+> **Latest validation commits:** `ad04af7` (execution wiring, validation). Tag: `0.8.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
