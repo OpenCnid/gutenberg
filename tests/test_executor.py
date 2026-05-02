@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from gutenberg.executor import (
+    ClawdExecutor,
     CommandExecutor,
     ManualExecutor,
     ExecutorResult,
@@ -236,6 +237,163 @@ class TestManualExecutor:
 # Config tests
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# ClawdExecutor tests
+# ---------------------------------------------------------------------------
+
+class TestClawdExecutor:
+    def _make_fake_openclaw(self, tmp_path, response_json, exit_code=0):
+        """Create a fake openclaw CLI that returns a canned JSON response."""
+        script = tmp_path / "fake-openclaw"
+        script.write_text(
+            "#!/bin/bash\n"
+            f"exit {exit_code}\n"
+            if exit_code != 0 else
+            "#!/bin/bash\n"
+            f"cat << 'RESPONSE'\n{json.dumps(response_json)}\nRESPONSE\n"
+        )
+        script.chmod(0o755)
+        return str(script)
+
+    def test_success(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        response = {
+            "result": {
+                "meta": {"finalAssistantRawText": "# Chunk Summary\nAnalysis of the text."},
+                "payloads": [{"type": "text", "text": "# Chunk Summary\nAnalysis of the text."}],
+            }
+        }
+        cli = self._make_fake_openclaw(tmp_path, response)
+        executor = ClawdExecutor(cli_path=cli, model="test-model", thinking="low")
+
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        result = executor.launch(task_path, result_path, timeout=30)
+
+        assert result.success
+        assert Path(result_path).exists()
+        content = Path(result_path).read_text(encoding="utf-8")
+        assert "# Chunk Summary" in content
+
+    def test_nonzero_exit(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        cli = self._make_fake_openclaw(tmp_path, {}, exit_code=1)
+        executor = ClawdExecutor(cli_path=cli)
+
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        result = executor.launch(task_path, result_path, timeout=30)
+
+        assert not result.success
+        assert result.exit_code == 1
+        assert "exited with code 1" in result.error_message
+
+    def test_missing_cli(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        executor = ClawdExecutor(cli_path="/nonexistent/openclaw-fake")
+
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        result = executor.launch(task_path, result_path, timeout=30)
+
+        assert not result.success
+        assert "not found" in result.error_message.lower()
+
+    def test_empty_response(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        response = {"result": {"meta": {}, "payloads": []}}
+        cli = self._make_fake_openclaw(tmp_path, response)
+        executor = ClawdExecutor(cli_path=cli)
+
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        result = executor.launch(task_path, result_path, timeout=30)
+
+        assert not result.success
+        assert "No text content" in result.error_message
+
+    def test_extract_text_payloads_fallback(self, tmp_path):
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        # No finalAssistantRawText, but text in payloads
+        response = {
+            "result": {
+                "meta": {},
+                "payloads": [{"type": "text", "text": "# Chunk Summary\nFrom payloads."}],
+            }
+        }
+        cli = self._make_fake_openclaw(tmp_path, response)
+        executor = ClawdExecutor(cli_path=cli)
+
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        result = executor.launch(task_path, result_path, timeout=30)
+
+        assert result.success
+        content = Path(result_path).read_text(encoding="utf-8")
+        assert "From payloads" in content
+
+    def test_includes_chunk_content(self, tmp_path):
+        """Verify the executor combines task + chunk content in the message."""
+        manifest = _make_manifest(1)
+        run_dir = _setup_run(tmp_path / "run", manifest)
+        status = create_status(manifest)
+        materialize_tasks(manifest, status, run_dir)
+
+        # Write a script that echoes the --message arg to stderr for inspection
+        # and returns a valid response
+        script = tmp_path / "spy-openclaw"
+        response = {"result": {"meta": {"finalAssistantRawText": "# Chunk Summary\nDone."}, "payloads": []}}
+        script.write_text(
+            "#!/bin/bash\n"
+            "# Find the message arg\n"
+            "while [ $# -gt 0 ]; do\n"
+            "  if [ \"$1\" = \"--message\" ]; then\n"
+            "    echo \"$2\" > \"${TMPDIR:-/tmp}/clawd-executor-message.txt\"\n"
+            "    break\n"
+            "  fi\n"
+            "  shift\n"
+            "done\n"
+            f"cat << 'RESPONSE'\n{json.dumps(response)}\nRESPONSE\n"
+        )
+        script.chmod(0o755)
+
+        executor = ClawdExecutor(cli_path=str(script))
+        task_path = str(P.worker_task_path(run_dir, "chunk-0001"))
+        result_path = str(P.worker_result_path(run_dir, "chunk-0001"))
+        executor.launch(task_path, result_path, timeout=30)
+
+        # Check the captured message includes chunk content
+        msg_file = Path(os.environ.get("TMPDIR", "/tmp")) / "clawd-executor-message.txt"
+        if msg_file.exists():
+            captured = msg_file.read_text(encoding="utf-8")
+            assert "# Chunk Content" in captured
+            msg_file.unlink()
+
+
+# ---------------------------------------------------------------------------
+# ExecutorConfig tests
+# ---------------------------------------------------------------------------
+
 class TestExecutorConfig:
     def test_load_config_from_file(self, tmp_path):
         config_file = tmp_path / "executor.json"
@@ -298,6 +456,32 @@ class TestExecutorConfig:
     def test_create_executor_factory_manual(self):
         executor = create_executor({"type": "manual"})
         assert isinstance(executor, ManualExecutor)
+
+    def test_create_executor_factory_clawd(self):
+        executor = create_executor({
+            "type": "clawd",
+            "model": "test/model",
+            "thinking": "high",
+        })
+        assert isinstance(executor, ClawdExecutor)
+        assert executor.model == "test/model"
+        assert executor.thinking == "high"
+
+    def test_create_executor_factory_clawd_defaults(self):
+        executor = create_executor({"type": "clawd"})
+        assert isinstance(executor, ClawdExecutor)
+        assert executor.model == "lil-dario/claude-sonnet-4-6"
+        assert executor.thinking == "medium"
+
+    def test_validate_clawd_no_command_ok(self):
+        """clawd type should not require a command field."""
+        errors = validate_executor_config({"type": "clawd"})
+        assert not any("command" in e.lower() for e in errors)
+
+    def test_validate_command_requires_command(self):
+        """command type still requires a command field."""
+        errors = validate_executor_config({"type": "command"})
+        assert any("command" in e.lower() for e in errors)
 
 
 # ---------------------------------------------------------------------------

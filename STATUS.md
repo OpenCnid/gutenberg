@@ -2,61 +2,62 @@
 
 ## Current State
 
-V1 implementation complete and dogfooded. V2 implementation complete and validated. The next workstream is **V3 specification writing** for safe executable recursive orchestration; V3 has not been implemented yet.
+V1–V3 complete. V3 dogfood-validated on Frankenstein (419K chars, 9 chunks, Sonnet 4.6 workers). 368 tests passing. Tagged 0.9.0.
 
 ## What's Built
 
+### V1 (Specs 01–06)
 - Boundary-aware chunking engine (heading/paragraph/sentence/whitespace/hard hierarchy)
 - CLI: `python -m gutenberg ingest` with full option parsing
 - Manifest builder + validator (`manifest.json`)
 - Run-specific prompt generators (orchestrator, worker, synthesis)
-- Chunk context enrichment: position metadata, neighboring context, conservative prose section detection
-- `status.json` tracking plus `gutenberg status`
+
+### V2 (Specs 07–10)
+- Chunk context enrichment: position metadata, neighboring context, section detection
+- `status.json` tracking + `gutenberg status`
 - Run integrity checks via `gutenberg validate`
-- Orchestration planning via `gutenberg orchestrate`
-- Dry-run planning, JSON output, script generation, resume/skip completed chunks, and synthesis readiness checks
+- Orchestration planning via `gutenberg orchestrate` (dry-run, JSON, script output)
+- Resume/skip completed chunks, synthesis readiness checks
+
+### V3 (Specs 11–15)
+- Per-chunk task materialization: `gutenberg tasks` (concrete task files, no placeholders)
+- Worker lifecycle: `gutenberg mark`, `retry`, `skip` (durable states, attempt tracking, retry bounds)
+- Executor/worker launch: `gutenberg execute` (command executor, bounded concurrency, signal handling)
+- Synthesis execution: `gutenberg synthesize --execute` (partial synthesis support)
+- Run artifacts & reporting: `gutenberg report` (event logs, per-attempt logs, orchestration.json)
+- 14-check validation suite covering all V3 artifacts
+
+### Design Invariants
 - Python stdlib only, no external dependencies
-- Test suite: 166 tests passing as of V2 validation
+- JSON for machines, markdown for agents and humans
+- V1/V2 backward compatibility preserved
+- Dry-run default; `--execute` required for any external launch
 
-## V1 Dogfood Results (2026-04-24)
+## V3 Dogfood Results (2026-05-02)
 
-- Source: Frankenstein by Mary Shelley, 419k chars
-- 9 chunks at default 50k/2k settings, <1s ingestion
-- 3 workers (chunks 1, 5, 9) produced correct 7-section analyses
-- Synthesis handled 6 missing chunks explicitly, 19k chars output
-- Pattern validated: decompose → analyze snippets → synthesize
+- Source: Frankenstein; or, the Modern Prometheus by Mary Shelley
+- 419,240 characters, 9 chunks at default 50k/2k
+- Model: Claude Sonnet 4.6 via lil-dario proxy
+- Wall clock: ~15 minutes (sequential workers + synthesis)
+- All 9 workers produced correct 7-section analyses (6–10KB each)
+- Synthesis: 30KB unified analysis with 9 themes, cross-chunk quotes, methodology notes
+- 14/14 validation checks pass
+- 10 total attempts (1 retry for chunk-0001 from initial executor bug)
+- Full audit trail: events.jsonl (23 events), per-attempt logs, orchestration.json
+- Verdict: **V3 validated — pipeline works end-to-end with real LLM**
 
-## V2 Dogfood Results (2026-04-24)
+### Bugs Found in Dogfood
+1. Synthesis LLM hallucinated tool calls in preamble (prompt issue, not logic)
+2. Synthesis task shows `[missing]` until manual `tasks --refresh` after workers complete
 
-- Source: Frankenstein; or, the Modern Prometheus, Project Gutenberg #84
-- Author: Mary Shelley
-- Character count: 419,240
-- Chunk count: 9 at default 50k/2k settings
-- Verified: `status`, `validate`, context metadata, `orchestrate`, JSON plan output, script output, resume/skip completed chunks, and synthesis readiness checks
-- Failure-mode checks passed: missing chunk, edited chunk/hash mismatch, empty result handling, missing `status.json` inference
-- Bug found: stale `status.json` could disagree with filesystem after workers wrote result files manually
-- Fix committed: `20eeea9 fix: reconcile status.json with filesystem on every read`
-- Related fix: `bc86c69 fix: sentinel values for first/last chunk neighbor context`
-- V2 orchestration baseline: `f2abb05 feat: automated orchestration — gutenberg orchestrate CLI + plan/script generation (spec 10)`
-- Revised verdict: **V2 validated — ready for V3 specs**
+### Friction Points
+- No built-in LLM executor — required a wrapper script
+- Worker tasks don't include chunk content (executor must assemble prompt)
+- Workers and synthesis need separate executor configs
 
-## V3 Direction
+## Next Steps
 
-V3 should move from orchestration planning to safe executable orchestration while preserving the artifact-first contract:
-
-- Explicit execution only (`--execute` or equivalent), never hidden external agent calls
-- Bounded worker concurrency with resumable lifecycle tracking
-- Per-chunk task materialization so worker tasks are copy/executable without manual placeholder substitution
-- Actual synthesis execution with explicit partial-synthesis behavior
-- Auditable run artifacts, logs, and final reporting
-
-## Decisions Locked
-
-- Python standalone CLI
-- Python stdlib first; justify any dependency before adding it
-- Default chunk size: 50,000 chars
-- Default overlap: 2,000 chars
-- Boundary-aware chunking
-- JSON manifest/status/artifacts for machines; markdown prompts/tasks/results for agents and humans
-- V1/V2 compatibility; manifest schema changes should be additive whenever possible
-- Dry-run/manual/script pathways remain available even after executable orchestration exists
+- [ ] Fix BUG-2: auto-refresh synthesis task in `synthesize --execute`
+- [ ] Add result format validation (check output starts with expected markdown structure)
+- [ ] First-class LLM executor type (API calls, prompt assembly, response extraction built in)
+- [ ] Consider concurrent execution with rate limiting for larger texts

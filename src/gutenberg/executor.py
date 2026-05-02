@@ -120,6 +120,154 @@ class CommandExecutor:
         return ExecutorResult(success=True, exit_code=0)
 
 
+class ClawdExecutor:
+    """Launches workers via the OpenClaw CLI as a subprocess.
+
+    Reads the task file, sends its content as a message to an OpenClaw agent,
+    and writes the agent's response to the result path. The agent runs with
+    the run directory as its workspace so it can read chunk files directly.
+
+    Gutenberg never imports OpenClaw — it shells out to the binary.
+    """
+
+    def __init__(
+        self,
+        model: str = "lil-dario/claude-sonnet-4-6",
+        thinking: str = "medium",
+        cwd: str | None = None,
+        cli_path: str = "openclaw",
+    ):
+        self.model = model
+        self.thinking = thinking
+        self.cwd = cwd
+        self.cli_path = cli_path
+
+    def launch(self, task_path: str, result_path: str, timeout: int) -> ExecutorResult:
+        # Verify openclaw CLI exists
+        import shutil
+        if not shutil.which(self.cli_path):
+            return ExecutorResult(
+                success=False,
+                error_message=f"OpenClaw CLI not found: {self.cli_path}. Install it or check your PATH.",
+            )
+
+        # Read the task file
+        try:
+            task_content = Path(task_path).read_text(encoding="utf-8")
+        except (OSError, IOError) as e:
+            return ExecutorResult(
+                success=False,
+                error_message=f"Failed to read task file: {e}",
+            )
+
+        # Derive run_dir from task_path: tasks/workers/chunk-XXXX.worker.md -> run_dir
+        run_dir = str(Path(task_path).parent.parent.parent)
+        chunk_id = Path(task_path).stem.replace(".worker", "")
+        chunk_path = Path(run_dir) / P.CHUNKS_DIR / f"{chunk_id}.md"
+
+        # Read chunk content and append to task
+        chunk_content = ""
+        if chunk_path.exists():
+            try:
+                chunk_content = chunk_path.read_text(encoding="utf-8")
+            except (OSError, IOError):
+                pass
+
+        if chunk_content:
+            message = (
+                f"{task_content}\n\n---\n\n"
+                f"# Chunk Content\n\n"
+                f"Below is the full text of the chunk to analyze. "
+                f"Apply the instructions above to this content.\n\n"
+                f"{chunk_content}"
+            )
+        else:
+            message = task_content
+
+        # Build the openclaw agent command
+        cmd = [
+            self.cli_path, "agent",
+            "--message", message,
+            "--model", self.model,
+            "--thinking", self.thinking,
+            "--timeout", str(timeout),
+            "--json",
+        ]
+
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 30,  # buffer beyond agent timeout
+                cwd=self.cwd or run_dir,
+            )
+        except FileNotFoundError:
+            return ExecutorResult(
+                success=False,
+                error_message=f"OpenClaw CLI not found: {self.cli_path}",
+            )
+        except subprocess.TimeoutExpired:
+            return ExecutorResult(
+                success=False,
+                error_message=f"OpenClaw agent timed out after {timeout}s",
+            )
+
+        if proc.returncode != 0:
+            stderr_snippet = (proc.stderr or "")[:500]
+            return ExecutorResult(
+                success=False,
+                exit_code=proc.returncode,
+                error_message=f"OpenClaw agent exited with code {proc.returncode}: {stderr_snippet}",
+            )
+
+        # Parse the JSON response and extract assistant text
+        try:
+            response = json.loads(proc.stdout)
+        except json.JSONDecodeError as e:
+            return ExecutorResult(
+                success=False,
+                error_message=f"Failed to parse OpenClaw response JSON: {e}",
+            )
+
+        # Extract text from response
+        text = self._extract_text(response)
+        if not text:
+            return ExecutorResult(
+                success=False,
+                error_message="No text content in OpenClaw agent response",
+            )
+
+        # Write result
+        Path(result_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(result_path).write_text(text + "\n", encoding="utf-8")
+
+        return ExecutorResult(success=True, exit_code=0)
+
+    @staticmethod
+    def _extract_text(response: dict[str, Any]) -> str:
+        """Extract assistant text from an OpenClaw agent JSON response."""
+        # Try result.meta.finalAssistantRawText first
+        result = response.get("result", {})
+        text = ""
+        if isinstance(result, dict):
+            text = result.get("meta", {}).get("finalAssistantRawText", "")
+
+        # Fall back to payloads
+        if not text and isinstance(result, dict):
+            payloads = result.get("payloads", [])
+            for p in payloads:
+                if isinstance(p, dict) and p.get("text"):
+                    text = p["text"]
+                    break
+
+        # Fall back to top-level message/text
+        if not text:
+            text = response.get("message", "") or response.get("text", "")
+
+        return text.strip()
+
+
 class ManualExecutor:
     """No-op executor that prints instructions. Preserves V2 behavior."""
 
@@ -167,8 +315,8 @@ def validate_executor_config(config: dict[str, Any]) -> list[str]:
         errors.append(f"Unknown executor type: {exec_type}")
 
     command = config.get("command", [])
-    if exec_type in ("command", "clawd") and not command:
-        errors.append("Executor type requires 'command' field")
+    if exec_type == "command" and not command:
+        errors.append("Executor type 'command' requires 'command' field")
 
     # Check for unknown template variables
     if command:
@@ -197,6 +345,14 @@ def create_executor(config: dict[str, Any]) -> ExecutorProtocol:
 
     if exec_type == "manual":
         return ManualExecutor()
+
+    if exec_type == "clawd":
+        return ClawdExecutor(
+            model=config.get("model", "lil-dario/claude-sonnet-4-6"),
+            thinking=config.get("thinking", "medium"),
+            cwd=config.get("cwd"),
+            cli_path=config.get("cli_path", "openclaw"),
+        )
 
     command = config.get("command", [])
     output_mode = config.get("output_mode", "file")
