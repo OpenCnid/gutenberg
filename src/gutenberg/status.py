@@ -106,22 +106,56 @@ def infer_status(manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     return status
 
 
-def reconcile_status(status: dict[str, Any], manifest: dict[str, Any], run_dir: Path) -> dict[str, Any]:
+def _validate_result_content(result_file: Path) -> tuple[bool, str | None]:
+    """Check if a result file has valid readable content.
+
+    Returns ``(valid, error_reason)``.
+    """
+    if not result_file.exists():
+        return False, "result_file_missing"
+    if result_file.stat().st_size == 0:
+        return False, "empty_result"
+    try:
+        content = result_file.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return False, "unreadable_result"
+    if not content.strip():
+        return False, "whitespace_only"
+    return True, None
+
+
+def reconcile_status(
+    status: dict[str, Any],
+    manifest: dict[str, Any],
+    run_dir: Path,
+    timeout_seconds: int = 1800,
+) -> dict[str, Any]:
     """Reconcile status.json with filesystem reality.
 
-    Handles V3 states: promotes valid results to done, demotes missing results,
-    and adds missing chunks from manifest.
+    Handles V3 states: promotes valid results to done, demotes missing/invalid
+    results, resolves stale running chunks, and reports unknown chunks.
     """
     changed = False
     now = datetime.now(timezone.utc).isoformat()
+    manifest_ids = {c["id"] for c in manifest.get("chunks", [])}
+
+    # Report unknown chunks in status (not in manifest) without crashing
+    unknown_ids = set(status.get("chunks", {}).keys()) - manifest_ids
+    if unknown_ids:
+        if "_warnings" not in status:
+            status["_warnings"] = []
+        for uid in sorted(unknown_ids):
+            warning = f"Chunk {uid} in status.json but not in manifest"
+            if warning not in status["_warnings"]:
+                status["_warnings"].append(warning)
 
     for c in manifest.get("chunks", []):
         cid = c["id"]
         if cid not in status["chunks"]:
             # Manifest chunk missing from status — add as pending or done
             result_file = P.worker_result_path(run_dir, cid)
-            has_result = result_file.exists() and result_file.stat().st_size > 0
-            state = "done" if has_result else "pending"
+            valid, _ = _validate_result_content(result_file)
+            state = "done" if valid else "pending"
             status["chunks"][cid] = {
                 "state": state,
                 "transitions": [{"state": state, "timestamp": now}],
@@ -131,13 +165,45 @@ def reconcile_status(status: dict[str, Any], manifest: dict[str, Any], run_dir: 
 
         entry = status["chunks"][cid]
         result_file = P.worker_result_path(run_dir, cid)
-        has_result = result_file.exists() and result_file.stat().st_size > 0
+        valid, err = _validate_result_content(result_file)
 
-        if has_result and entry["state"] in ("pending", "missing", "running"):
+        # Resolve stale running: chunk marked running too long
+        if entry["state"] == "running":
+            running_since = None
+            for t in reversed(entry.get("transitions", [])):
+                if t["state"] == "running":
+                    running_since = t["timestamp"]
+                    break
+            if running_since is not None:
+                started = datetime.fromisoformat(running_since)
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+                if elapsed >= timeout_seconds:
+                    if valid:
+                        update_chunk_state(status, cid, "done")
+                    else:
+                        update_chunk_state(status, cid, "failed")
+                        entry["last_error"] = {
+                            "code": "interrupted_or_stale",
+                            "message": f"Chunk was running for {int(elapsed)}s (timeout: {timeout_seconds}s) with no valid result.",
+                        }
+                    changed = True
+                    continue
+
+        if valid and entry["state"] in ("pending", "missing", "running"):
             update_chunk_state(status, cid, "done")
             changed = True
-        elif not has_result and entry["state"] == "done":
-            update_chunk_state(status, cid, "missing")
+        elif entry["state"] == "done" and not valid:
+            if err == "result_file_missing":
+                update_chunk_state(status, cid, "missing")
+            else:
+                # Empty, unreadable, or whitespace-only → failed with reason
+                update_chunk_state(status, cid, "failed")
+                entry["last_error"] = {
+                    "code": err or "invalid_result",
+                    "message": f"Result file validation failed: {err}",
+                }
             changed = True
         # skipped state is preserved — don't promote even if result exists
 

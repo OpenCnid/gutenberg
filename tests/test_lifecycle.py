@@ -535,6 +535,150 @@ class TestReconcileV3:
 # ---------------------------------------------------------------------------
 # Atomic status writes
 # ---------------------------------------------------------------------------
+# Enhanced V3 reconciliation (spec 12 compliance)
+# ---------------------------------------------------------------------------
+
+class TestReconcileV3Enhanced:
+    def test_done_with_empty_result_becomes_failed(self, tmp_path):
+        """Spec 12: done but result is empty → failed with validation reason."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        update_chunk_state(status, "chunk-0001", "done")
+        save_status(status, run_dir)
+        # Write empty result file
+        P.worker_result_path(run_dir, "chunk-0001").write_text("", encoding="utf-8")
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        assert status["chunks"]["chunk-0001"]["state"] == "failed"
+        assert status["chunks"]["chunk-0001"]["last_error"]["code"] == "empty_result"
+
+    def test_done_with_whitespace_only_result_becomes_failed(self, tmp_path):
+        """Spec 12: done but result is whitespace-only → failed."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        update_chunk_state(status, "chunk-0001", "done")
+        save_status(status, run_dir)
+        P.worker_result_path(run_dir, "chunk-0001").write_text("   \n  \n  ", encoding="utf-8")
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        assert status["chunks"]["chunk-0001"]["state"] == "failed"
+        assert status["chunks"]["chunk-0001"]["last_error"]["code"] == "whitespace_only"
+
+    def test_done_with_missing_result_becomes_missing(self, tmp_path):
+        """Spec 12: done but result file is missing → missing (unchanged behavior)."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        update_chunk_state(status, "chunk-0001", "done")
+        save_status(status, run_dir)
+        # No result file on disk
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        assert status["chunks"]["chunk-0001"]["state"] == "missing"
+
+    def test_stale_running_resolved_to_failed(self, tmp_path):
+        """Spec 12: stale running with no valid result → failed on status read."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        # Fake a running state from 2 hours ago
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        status["chunks"]["chunk-0001"]["state"] = "running"
+        status["chunks"]["chunk-0001"]["transitions"].append(
+            {"state": "running", "timestamp": two_hours_ago}
+        )
+        save_status(status, run_dir)
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir, timeout_seconds=1800)
+        assert status["chunks"]["chunk-0001"]["state"] == "failed"
+        assert status["chunks"]["chunk-0001"]["last_error"]["code"] == "interrupted_or_stale"
+
+    def test_stale_running_with_valid_result_promotes_to_done(self, tmp_path):
+        """Spec 12: stale running with valid result → done."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        two_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        status["chunks"]["chunk-0001"]["state"] = "running"
+        status["chunks"]["chunk-0001"]["transitions"].append(
+            {"state": "running", "timestamp": two_hours_ago}
+        )
+        save_status(status, run_dir)
+        _write_result(run_dir, "chunk-0001")
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir, timeout_seconds=1800)
+        assert status["chunks"]["chunk-0001"]["state"] == "done"
+
+    def test_recent_running_not_resolved(self, tmp_path):
+        """Running chunk within timeout window is not resolved."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        just_now = datetime.now(timezone.utc).isoformat()
+        status["chunks"]["chunk-0001"]["state"] = "running"
+        status["chunks"]["chunk-0001"]["transitions"].append(
+            {"state": "running", "timestamp": just_now}
+        )
+        save_status(status, run_dir)
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir, timeout_seconds=1800)
+        assert status["chunks"]["chunk-0001"]["state"] == "running"
+
+    def test_unknown_chunks_in_status_reported(self, tmp_path):
+        """Spec 12: unknown chunks in status → reported without crashing."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        # Add an extra chunk that's not in manifest
+        status["chunks"]["chunk-9999"] = {
+            "state": "done",
+            "transitions": [{"state": "done", "timestamp": datetime.now(timezone.utc).isoformat()}],
+        }
+        save_status(status, run_dir)
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        # Should not crash and should report the unknown chunk
+        assert "_warnings" in status
+        assert any("chunk-9999" in w for w in status["_warnings"])
+        # Original chunks still intact
+        for c in manifest["chunks"]:
+            assert c["id"] in status["chunks"]
+
+    def test_unknown_chunk_warnings_not_duplicated(self, tmp_path):
+        """Calling reconcile twice doesn't duplicate warnings."""
+        manifest = _make_manifest()
+        run_dir = _setup_run(tmp_path, manifest)
+        status = load_status(run_dir)
+
+        status["chunks"]["chunk-9999"] = {
+            "state": "pending",
+            "transitions": [{"state": "pending", "timestamp": datetime.now(timezone.utc).isoformat()}],
+        }
+        save_status(status, run_dir)
+
+        status = load_status(run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        status = reconcile_status(status, manifest, run_dir)
+        assert len([w for w in status["_warnings"] if "chunk-9999" in w]) == 1
+
+
+# ---------------------------------------------------------------------------
 
 class TestAtomicWrite:
     def test_status_write_no_tmp_left(self, tmp_path):
