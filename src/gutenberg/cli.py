@@ -27,6 +27,12 @@ from gutenberg.synthesis import (
     check_synthesis_readiness,
     execute_synthesis,
 )
+from gutenberg.reporting import (
+    build_report,
+    format_report_markdown,
+    format_report_json,
+    write_reports,
+)
 from gutenberg import paths as P
 
 
@@ -73,6 +79,13 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     orchestrate.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    report = sub.add_parser("report", help="Generate run report.")
+    report.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    report.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+    report.add_argument("--markdown", action="store_true", help="Output markdown report.")
+    report.add_argument("--write", action="store_true", help="Write reports to reports/ directory.")
+    report.add_argument("--include-validation", action="store_true", help="Include validation results.")
 
     synthesize = sub.add_parser("synthesize", help="Run synthesis over worker results.")
     synthesize.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
@@ -410,6 +423,48 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_report(args: argparse.Namespace) -> int:
+    """Execute the report subcommand."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+    else:
+        status = reconcile_status(status, manifest, run_dir)
+
+    report = build_report(manifest, status, run_dir)
+
+    if args.include_validation:
+        from gutenberg.validation import validate_run
+        checks = validate_run(run_dir, strict=True)
+        report["validation"] = checks
+
+    if args.write:
+        md_path, json_path = write_reports(report, run_dir)
+        print(f"Reports written:")
+        print(f"  Markdown: {md_path}")
+        print(f"  JSON: {json_path}")
+        return 0
+
+    if args.json_output:
+        json.dump(format_report_json(report), sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        print(format_report_markdown(report))
+
+    return 0
+
+
 def _run_synthesize(args: argparse.Namespace) -> int:
     """Execute the synthesize subcommand."""
     run_dir = Path(args.run_dir)
@@ -738,6 +793,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": _run_status,
         "validate": _run_validate,
         "orchestrate": _run_orchestrate,
+        "report": _run_report,
         "synthesize": _run_synthesize,
         "execute": _run_execute,
         "mark": _run_mark,

@@ -193,7 +193,34 @@ def validate_run(run_dir: Path, strict: bool = True) -> list[dict[str, Any]]:
             else:
                 results.append(_check("task_no_placeholders", True, "No unresolved placeholders in task files"))
 
-    # 11. Synthesis status consistency (V3)
+    # 11. orchestration.json validation (V3)
+    orch_path = P.orchestration_json_path(run_dir)
+    if orch_path.exists():
+        try:
+            orch_data = json.loads(orch_path.read_text(encoding="utf-8"))
+            results.append(_check("orchestration_json_valid", True, "orchestration.json is valid JSON"))
+
+            # Check events.jsonl reference
+            events_ref = orch_data.get("artifacts", {}).get("events", "")
+            if events_ref:
+                events_file = run_dir / events_ref
+                if events_file.exists():
+                    results.append(_check("events_log_exists", True, "Event log file exists"))
+                else:
+                    results.append(_check("events_log_exists", False, f"Event log referenced but not found: {events_ref}"))
+        except (json.JSONDecodeError, ValueError) as exc:
+            results.append(_check("orchestration_json_valid", False, f"orchestration.json is not valid JSON: {exc}"))
+
+    # 12. Report validation (V3)
+    report_json = P.report_json_path(run_dir)
+    if report_json.exists():
+        try:
+            json.loads(report_json.read_text(encoding="utf-8"))
+            results.append(_check("report_json_valid", True, "reports/run-report.json is valid JSON"))
+        except (json.JSONDecodeError, ValueError) as exc:
+            results.append(_check("report_json_valid", False, f"reports/run-report.json is not valid JSON: {exc}"))
+
+    # 13. Synthesis status consistency (V3)
     if status is not None:
         synth = status.get("synthesis", {})
         synth_state = synth.get("state")
