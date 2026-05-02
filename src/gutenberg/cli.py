@@ -23,6 +23,10 @@ from gutenberg.executor import (
     create_executor,
     execute_workers,
 )
+from gutenberg.synthesis import (
+    check_synthesis_readiness,
+    execute_synthesis,
+)
 from gutenberg import paths as P
 
 
@@ -69,6 +73,16 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
     orchestrate.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    synthesize = sub.add_parser("synthesize", help="Run synthesis over worker results.")
+    synthesize.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    synthesize.add_argument("--execute", action="store_true", help="Launch synthesis executor.")
+    synthesize.add_argument("--partial", action="store_true", help="Allow synthesis with missing chunks.")
+    synthesize.add_argument("--force", action="store_true", help="Overwrite existing synthesis output.")
+    synthesize.add_argument("--executor", default=None, help="Executor type or profile name.")
+    synthesize.add_argument("--executor-config", default=None, help="Path to executor config JSON.")
+    synthesize.add_argument("--timeout-seconds", type=int, default=1800, help="Synthesis timeout (default: 1800).")
+    synthesize.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     execute = sub.add_parser("execute", help="Execute workers (alias for orchestrate --execute).")
     execute.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
@@ -396,6 +410,94 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_synthesize(args: argparse.Namespace) -> int:
+    """Execute the synthesize subcommand."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+    else:
+        status = reconcile_status(status, manifest, run_dir)
+
+    if not args.execute:
+        # Dry-run: readiness check only
+        readiness = check_synthesis_readiness(manifest, status, run_dir)
+
+        if args.json_output:
+            json.dump(readiness, sys.stdout, indent=2, ensure_ascii=False)
+            print()
+        else:
+            if readiness["ready"]:
+                print("Synthesis: READY")
+                print(f"  Available results: {readiness['available_results']} of {readiness['input_chunks']}")
+            else:
+                print("Synthesis: NOT READY")
+                for b in readiness["blockers"]:
+                    print(f"  Blocker: {b}")
+        return 0 if readiness["ready"] else 1
+
+    # Execute synthesis
+    cli_overrides: dict[str, Any] = {}
+    if args.executor:
+        cli_overrides["type"] = args.executor
+    if args.timeout_seconds:
+        cli_overrides["timeout_seconds"] = args.timeout_seconds
+
+    config = load_executor_config(
+        config_path=getattr(args, "executor_config", None),
+        cli_overrides=cli_overrides,
+    )
+
+    exec_type = config.get("type", "command")
+    if exec_type != "manual" and "command" not in config:
+        print("Error: No executor command configured.", file=sys.stderr)
+        return 1
+
+    errors = validate_executor_config(config)
+    if errors:
+        for e in errors:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    executor = create_executor(config)
+
+    result = execute_synthesis(
+        manifest=manifest,
+        status=status,
+        run_dir=run_dir,
+        executor=executor,
+        partial=args.partial,
+        force=args.force,
+        timeout=config.get("timeout_seconds", 1800),
+    )
+
+    if args.json_output:
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        if result["success"]:
+            state = result.get("state", "done")
+            print(f"Synthesis {state}: {result.get('result_path', '')}")
+            if result.get("partial"):
+                print(f"  Partial: {result['available_results']} of {result['input_chunks']} chunks")
+        else:
+            print(f"Synthesis failed: {result.get('reason', 'unknown')}")
+            for b in result.get("blockers", []):
+                print(f"  Blocker: {b}")
+
+    return 0 if result["success"] else 1
+
+
 def _run_execute(args: argparse.Namespace) -> int:
     """Execute the execute subcommand (alias for orchestrate --execute)."""
     run_dir = Path(args.run_dir)
@@ -636,6 +738,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": _run_status,
         "validate": _run_validate,
         "orchestrate": _run_orchestrate,
+        "synthesize": _run_synthesize,
         "execute": _run_execute,
         "mark": _run_mark,
         "retry": _run_retry,

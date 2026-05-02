@@ -11,6 +11,8 @@ from gutenberg import paths as P
 from gutenberg.manifest import validate_manifest
 from gutenberg.status import load_status
 
+_SYNTHESIS_DONE_STATES = ("done", "partial")
+
 
 def _sha256_file(path: Path) -> str:
     """Compute SHA-256 hex digest of a file's contents."""
@@ -190,5 +192,24 @@ def validate_run(run_dir: Path, strict: bool = True) -> list[dict[str, Any]]:
                 ))
             else:
                 results.append(_check("task_no_placeholders", True, "No unresolved placeholders in task files"))
+
+    # 11. Synthesis status consistency (V3)
+    if status is not None:
+        synth = status.get("synthesis", {})
+        synth_state = synth.get("state")
+        if synth_state in _SYNTHESIS_DONE_STATES:
+            synth_result = P.synthesis_result_path(run_dir)
+            if synth_result.exists() and synth_result.stat().st_size > 0:
+                results.append(_check(
+                    "synthesis_consistency",
+                    True,
+                    f"Synthesis status '{synth_state}' consistent with output file",
+                ))
+            else:
+                results.append(_check(
+                    "synthesis_consistency",
+                    False,
+                    f"Synthesis status is '{synth_state}' but output file is missing or empty",
+                ))
 
     return results
