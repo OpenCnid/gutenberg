@@ -158,21 +158,32 @@ def generate_script(plan: dict[str, Any], run_dir: Path) -> str:
         cid = chunk["id"]
         chunk_path = run_dir / chunk.get("path", f"{P.CHUNKS_DIR}/{cid}.md")
         result_path = P.worker_result_path(run_dir, cid)
+        task_path = P.worker_task_path(run_dir, cid)
 
         lines.append(f"# --- Worker: {cid} ---")
-        lines.append(f"# Prompt: {worker_prompt}")
+        if task_path.exists():
+            lines.append(f"# Task:   {task_path}")
+        else:
+            lines.append(f"# Prompt: {worker_prompt}")
         lines.append(f"# Chunk:  {chunk_path}")
         lines.append(f"# Output: {result_path}")
         lines.append(f"echo \"Processing {cid}...\"")
-        lines.append(f"# <your-agent-command> --prompt \"{worker_prompt}\" --input \"{chunk_path}\" --output \"{result_path}\"")
-        lines.append(f"# TODO: update status.json after each worker")
+        if task_path.exists():
+            lines.append(f"# <your-agent-command> --task \"{task_path}\" --output \"{result_path}\"")
+        else:
+            lines.append(f"# <your-agent-command> --prompt \"{worker_prompt}\" --input \"{chunk_path}\" --output \"{result_path}\"")
         lines.append("")
 
     if plan["synthesis_ready"]:
         synthesis_prompt = P.synthesis_prompt_path(run_dir)
+        synthesis_task = P.synthesis_task_path(run_dir)
         lines.append("# --- Synthesis ---")
         lines.append(f"echo \"All workers complete. Running synthesis...\"")
-        lines.append(f"# <your-agent-command> --prompt \"{synthesis_prompt}\" --output \"{P.results_dir(run_dir) / 'synthesis.md'}\"")
+        if synthesis_task.exists():
+            lines.append(f"# <your-agent-command> --task \"{synthesis_task}\" --output \"{P.results_dir(run_dir) / 'synthesis.md'}\"")
+        else:
+            lines.append(f"# <your-agent-command> --prompt \"{synthesis_prompt}\" --output \"{P.results_dir(run_dir) / 'synthesis.md'}\"")
+
     else:
         lines.append("# Synthesis not ready — complete pending workers first.")
 
