@@ -21,7 +21,6 @@ from gutenberg.lifecycle import (
     record_attempt_success,
     record_attempt_failure,
     validate_worker_result,
-    resolve_stale_running,
 )
 from gutenberg.reporting import append_event, write_orchestration_summary, get_log_limits, enforce_run_log_cap
 from gutenberg.status import (
@@ -224,9 +223,8 @@ def execute_workers(
 
     Returns an execution summary dict.
     """
-    # Reconcile status and resolve stale running
-    status = reconcile_status(status, manifest, run_dir)
-    resolve_stale_running(status, manifest, run_dir, timeout_seconds=timeout)
+    # Reconcile status (includes stale-running resolution)
+    status = reconcile_status(status, manifest, run_dir, timeout_seconds=timeout)
 
     # Materialize tasks if missing
     tasks_index = P.tasks_index_path(run_dir)
