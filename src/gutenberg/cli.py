@@ -17,6 +17,12 @@ from gutenberg.validation import validate_run
 from gutenberg.orchestration import build_plan, format_plan_text, format_plan_json, generate_script, check_synthesis
 from gutenberg.tasks import materialize_tasks, check_staleness
 from gutenberg.lifecycle import mark_chunk, retry_chunks, skip_chunk
+from gutenberg.executor import (
+    load_executor_config,
+    validate_executor_config,
+    create_executor,
+    execute_workers,
+)
 from gutenberg import paths as P
 
 
@@ -56,7 +62,24 @@ def _build_parser() -> argparse.ArgumentParser:
     orchestrate.add_argument("--synthesis-check", action="store_true", help="Check synthesis readiness.")
     orchestrate.add_argument("--script", action="store_true", help="Generate a shell script for pending workers.")
     orchestrate.add_argument("--skip-failed", action="store_true", help="Skip failed chunks instead of retrying.")
+    orchestrate.add_argument("--executor", default=None, help="Executor type or profile name.")
+    orchestrate.add_argument("--executor-config", default=None, help="Path to executor config JSON.")
+    orchestrate.add_argument("--concurrency", type=int, default=1, help="Max workers to run concurrently (default: 1).")
+    orchestrate.add_argument("--timeout-seconds", type=int, default=1800, help="Per-worker timeout in seconds (default: 1800).")
+    orchestrate.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
+    orchestrate.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
     orchestrate.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
+
+    execute = sub.add_parser("execute", help="Execute workers (alias for orchestrate --execute).")
+    execute.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
+    execute.add_argument("--executor", default=None, help="Executor type or profile name.")
+    execute.add_argument("--executor-config", default=None, help="Path to executor config JSON.")
+    execute.add_argument("--concurrency", type=int, default=1, help="Max workers to run concurrently (default: 1).")
+    execute.add_argument("--timeout-seconds", type=int, default=1800, help="Per-worker timeout in seconds (default: 1800).")
+    execute.add_argument("--retry-failed", action="store_true", help="Include failed chunks in execution queue.")
+    execute.add_argument("--skip-failed", action="store_true", help="Skip failed chunks.")
+    execute.add_argument("--only", action="append", default=None, help="Only execute specific chunk IDs (repeatable).")
+    execute.add_argument("--json", dest="json_output", action="store_true", help="Output machine-readable JSON.")
 
     mark = sub.add_parser("mark", help="Manually set a chunk's state.")
     mark.add_argument("run_dir", metavar="run-dir", help="Path to the run directory.")
@@ -326,11 +349,8 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
 
     manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
 
-    # --execute is not implemented in V2
     if args.execute:
-        print("Warning: --execute is not implemented in V2. "
-              "Orchestration generates commands and scripts only.", file=sys.stderr)
-        return 1
+        return _run_execute_impl(args, run_dir, manifest)
 
     # Load or infer status, then reconcile with reality
     status = load_status(run_dir)
@@ -374,6 +394,83 @@ def _run_orchestrate(args: argparse.Namespace) -> int:
         print(format_plan_text(plan, run_dir))
 
     return 0
+
+
+def _run_execute(args: argparse.Namespace) -> int:
+    """Execute the execute subcommand (alias for orchestrate --execute)."""
+    run_dir = Path(args.run_dir)
+    if not run_dir.exists() or not run_dir.is_dir():
+        print(f"Error: Run directory not found: {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest_file = P.manifest_path(run_dir)
+    if not manifest_file.exists():
+        print(f"Error: No manifest.json in {run_dir}", file=sys.stderr)
+        return 1
+
+    manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    return _run_execute_impl(args, run_dir, manifest)
+
+
+def _run_execute_impl(args: argparse.Namespace, run_dir: Path, manifest: dict) -> int:
+    """Shared execution logic for orchestrate --execute and execute."""
+    # Build executor config
+    cli_overrides: dict[str, Any] = {}
+    if getattr(args, "executor", None):
+        cli_overrides["type"] = args.executor
+    if getattr(args, "concurrency", None):
+        cli_overrides["concurrency"] = args.concurrency
+    if getattr(args, "timeout_seconds", None):
+        cli_overrides["timeout_seconds"] = args.timeout_seconds
+
+    config = load_executor_config(
+        config_path=getattr(args, "executor_config", None),
+        cli_overrides=cli_overrides,
+    )
+
+    # Ensure there's a command for non-manual executors
+    exec_type = config.get("type", "command")
+    if exec_type != "manual" and "command" not in config:
+        print("Error: No executor command configured. "
+              "Use --executor-config or provide --executor manual.",
+              file=sys.stderr)
+        return 1
+
+    errors = validate_executor_config(config)
+    if errors:
+        for e in errors:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    executor = create_executor(config)
+
+    status = load_status(run_dir)
+    if status is None:
+        status = infer_status(manifest, run_dir)
+
+    result = execute_workers(
+        manifest=manifest,
+        status=status,
+        run_dir=run_dir,
+        executor=executor,
+        concurrency=config.get("concurrency", 1),
+        only=getattr(args, "only", None),
+        retry_failed=getattr(args, "retry_failed", False),
+        timeout=config.get("timeout_seconds", 1800),
+    )
+
+    if getattr(args, "json_output", False):
+        json.dump(result, sys.stdout, indent=2, ensure_ascii=False)
+        print()
+    else:
+        print(f"Execution complete:")
+        print(f"  Launched: {result['launched']}")
+        print(f"  Succeeded: {result['succeeded']}")
+        print(f"  Failed: {result['failed']}")
+        if result.get("interrupted"):
+            print(f"  Interrupted: yes")
+
+    return 1 if result["failed"] > 0 else 0
 
 
 def _run_mark(args: argparse.Namespace) -> int:
@@ -539,6 +636,7 @@ def main(argv: list[str] | None = None) -> None:
         "status": _run_status,
         "validate": _run_validate,
         "orchestrate": _run_orchestrate,
+        "execute": _run_execute,
         "mark": _run_mark,
         "retry": _run_retry,
         "skip": _run_skip,

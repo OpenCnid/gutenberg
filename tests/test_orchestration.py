@@ -229,7 +229,7 @@ class TestCLIOrchestrate:
         assert "#!/usr/bin/env bash" in captured.out
         assert "set -e" in captured.out
 
-    def test_execute_not_implemented(self, tmp_path, source_file, capsys):
+    def test_execute_requires_config(self, tmp_path, source_file, capsys):
         run_dir, _, _ = _ingest(tmp_path, source_file)
         try:
             main(["orchestrate", str(run_dir), "--execute"])
@@ -237,7 +237,7 @@ class TestCLIOrchestrate:
         except SystemExit as e:
             assert e.code == 1
         captured = capsys.readouterr()
-        assert "not implemented" in captured.err.lower()
+        assert "executor" in captured.err.lower()
 
     def test_v1_run_without_status(self, tmp_path, source_file, capsys):
         run_dir, _, _ = _ingest(tmp_path, source_file)
