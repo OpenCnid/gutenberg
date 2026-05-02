@@ -33,12 +33,20 @@ If you are entering this repository cold, start here, then progressively disclos
 ## Source Layout
 
 - `src/gutenberg/` — Python package
-  - `cli.py` — CLI entry (`python -m gutenberg ingest`)
+  - `cli.py` — CLI entry (ingest, status, validate, orchestrate, tasks, execute, synthesize, report, mark, retry, skip)
   - `chunking.py` — boundary-aware text splitter
   - `manifest.py` — `manifest.json` builder and validator
   - `prompts.py` — orchestrator/worker/synthesis prompt generators
-  - `paths.py` — run directory path helpers
-- `tests/` — pytest suite (57 tests)
+  - `paths.py` — run directory path helpers (V1/V2/V3)
+  - `status.py` — per-chunk status tracking and reconciliation
+  - `orchestration.py` — orchestration planning and script generation
+  - `validation.py` — structural integrity and completeness checks
+  - `tasks.py` — per-chunk task materialization (V3, spec 14)
+  - `lifecycle.py` — worker lifecycle, retry, failure management (V3, spec 12)
+  - `executor.py` — executor/worker launch integration (V3, spec 11)
+  - `synthesis.py` — synthesis execution (V3, spec 13)
+  - `reporting.py` — event logging, orchestration summary, reports (V3, spec 15)
+- `tests/` — pytest suite (330 tests)
 - `pyproject.toml` — package config
 
 ## Invariants

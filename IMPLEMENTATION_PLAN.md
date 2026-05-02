@@ -1,9 +1,9 @@
 # Implementation Plan — Gutenberg V3
 
-> **Status:** V1 complete. V2 complete. V3 Slices 1-4 complete. Slice 5 (Spec 15) next.
+> **Status:** V1 complete. V2 complete. **V3 complete.** All 5 specs (11-15) implemented.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 308 tests passing (confirmed 2026-05-01).
-> **Latest validation commits:** `a89136a` (spec 13 synthesis).
+> **Current baseline:** 330 tests passing (confirmed 2026-05-01).
+> **Latest validation commits:** `128a71a` (spec 15 reporting). Tag: `0.3.0`.
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -86,6 +86,25 @@
 - Extended validation: synthesis status consistency check.
 - 19 new tests. Total: 308 passing.
 - Commit: `a89136a`.
+
+### V3 Slice 5 Complete (2026-05-01)
+
+- **Spec 15 — Run Artifacts, Logs, and Reporting** fully implemented.
+- New module: `src/gutenberg/reporting.py` — event log (JSONL), orchestration summary, report building.
+- New CLI: `gutenberg report` with `--json`, `--markdown`, `--write`, `--include-validation`.
+- Extended validation: orchestration.json, event log, report JSON checks.
+- 22 new tests. Total: 330 passing.
+- Commit: `128a71a`.
+
+### V3 Summary
+
+- **All 5 V3 specs implemented** in recommended order (14 → 12 → 11 → 13 → 15).
+- **New modules:** `tasks.py`, `lifecycle.py`, `executor.py`, `synthesis.py`, `reporting.py`.
+- **Extended:** `paths.py`, `status.py`, `cli.py`, `validation.py`.
+- **New CLI commands:** `tasks`, `mark`, `retry`, `skip`, `execute`, `synthesize`, `report`.
+- **CLI flags:** `--failures`, `--execute`, `--partial`, `--force`, `--refresh`, `--concurrency`, `--timeout-seconds`, `--executor-config`, `--retry-failed`, `--only`, `--include-validation`.
+- **Test growth:** 166 (V2) → 330 (V3) = +164 tests.
+- **V1/V2 backward compatibility preserved** throughout.
 
 ## V3 Goal
 
