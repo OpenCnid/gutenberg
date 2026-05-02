@@ -1,9 +1,9 @@
 # Implementation Plan — Gutenberg V3
 
-> **Status:** V1 complete. V2 complete. V3 Slices 1-2 complete. Slice 3 (Spec 11) next.
+> **Status:** V1 complete. V2 complete. V3 Slices 1-3 complete. Slice 4 (Spec 13) next.
 > **Last updated:** 2026-05-01
-> **Current baseline:** 262 tests passing (confirmed 2026-05-01).
-> **Latest validation commits:** `8dd6e65` (spec 12 worker lifecycle).
+> **Current baseline:** 289 tests passing (confirmed 2026-05-01).
+> **Latest validation commits:** `d4eb615` (spec 11 executor).
 > **Schema posture:** Keep manifest schema additive where possible. Preserve V1/V2 run compatibility.
 
 ## Completion Record
@@ -68,6 +68,15 @@
 - New CLI subcommands: `gutenberg mark`, `gutenberg retry`, `gutenberg skip`, `gutenberg status --failures`.
 - 56 new tests. Total: 262 passing.
 - Commit: `8dd6e65`.
+
+### V3 Slice 3 Complete (2026-05-01)
+
+- **Spec 11 — Executor / Worker Launch Integration** fully implemented.
+- New module: `src/gutenberg/executor.py` — `CommandExecutor`, `ManualExecutor`, `execute_workers`, config management.
+- Extended CLI: `gutenberg execute`, `gutenberg orchestrate --execute`, executor flags.
+- Updated existing test: `--execute` now requires config instead of old "not implemented" error.
+- 27 new tests. Total: 289 passing.
+- Commit: `d4eb615`.
 
 ## V3 Goal
 
